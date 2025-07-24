@@ -1,0 +1,567 @@
+<!DOCTYPE html>
+<html lang="en-us">
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+    <meta http-equiv="Content-Type" content="application/wasm" />
+    <title>BattleAway</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            animation: {
+              'shine': 'shine 1.5s infinite',
+              'kenburns': 'kenburns 20s ease-in-out infinite',
+              'fade': 'fade 3s ease-in-out',
+            },
+            keyframes: {
+              shine: {
+                '0%': { transform: 'translateX(-100%)' },
+                '100%': { transform: 'translateX(100%)' },
+              },
+              kenburns: {
+                '0%': { transform: 'scale(1.1) translate(0, 0)' },
+                '33%': { transform: 'scale(1.2) translate(-1%, -1%)' },
+                '66%': { transform: 'scale(1.15) translate(1%, 1%)' },
+                '100%': { transform: 'scale(1.1) translate(0, 0)' },
+              },
+              fade: {
+                '0%': { opacity: '0' },
+                '100%': { opacity: '1' },
+              }
+            }
+          }
+        }
+      }
+    </script>
+    <style>
+      .cinematic-container {
+        position: fixed;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+      }
+
+      .cinematic-slide {
+        position: absolute;
+        inset: 0;
+        opacity: 0;
+        transition: opacity 2s ease-in-out;
+        animation: kenburns 20s ease-in-out infinite;
+        filter: brightness(0.85) contrast(1.1);
+      }
+
+      .cinematic-slide.active {
+        opacity: 1;
+        z-index: 1;
+      }
+
+      .cinematic-slide img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+      }
+
+      @keyframes kenburns {
+        0% {
+          transform: scale(1.1) translate(0, 0);
+        }
+        33% {
+          transform: scale(1.2) translate(-1%, -1%);
+        }
+        66% {
+          transform: scale(1.15) translate(1%, 1%);
+        }
+        100% {
+          transform: scale(1.1) translate(0, 0);
+        }
+      }
+
+      .cinematic-overlay {
+        position: fixed;
+        inset: 0;
+        background: linear-gradient(
+          135deg,
+          rgba(0,0,0,0.7) 0%,
+          rgba(0,0,0,0.5) 50%,
+          rgba(0,0,0,0.65) 100%
+        );
+        pointer-events: none;
+        z-index: 2;
+      }
+
+      /* TV Static Effect */
+      .tv-effect {
+        position: fixed;
+        inset: 0;
+        background: url('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADIAAAAyBAMAAADsEZWCAAAAGFBMVEUAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAANdr6EAAAACHRSTlMzABEiM0Qid+vv8PMAAAAJcEhZcwAADsQAAA7EAZUrDhsAAAAZdEVYdFNvZnR3YXJlAHd3dy5pbmtzY2FwZS5vcmeb7jwaAAAAPUlEQVQ4y2NgoCngPxAggEYxiNL//wBmKBCgtYB/QEAA3QoGBgYGRnQVA2w4Fo0SHSVDRclQUTJUlJABABoTKG23VOneAAAAAElFTkSuQmCC');
+        opacity: 0.02;
+        pointer-events: none;
+        z-index: 3;
+        animation: tvStatic 0.5s steps(2, end) infinite;
+      }
+
+      /* Scanline Effect */
+      .scanlines {
+        position: fixed;
+        inset: 0;
+        background: linear-gradient(
+          to bottom,
+          transparent 50%,
+          rgba(0, 0, 0, 0.05) 51%
+        );
+        background-size: 100% 4px;
+        pointer-events: none;
+        z-index: 4;
+      }
+
+      /* Vignette Effect */
+      .vignette {
+        position: fixed;
+        inset: 0;
+        box-shadow: inset 0 0 150px rgba(0,0,0,0.6);
+        pointer-events: none;
+        z-index: 5;
+      }
+
+      @keyframes tvStatic {
+        0% { transform: translateX(0); }
+        100% { transform: translateX(1px); }
+      }
+
+      @keyframes flicker {
+        0% { opacity: 0.97; }
+        5% { opacity: 0.95; }
+        10% { opacity: 0.9; }
+        15% { opacity: 0.95; }
+        20% { opacity: 0.98; }
+        25% { opacity: 0.95; }
+        30% { opacity: 0.9; }
+        35% { opacity: 0.95; }
+        40% { opacity: 0.98; }
+        45% { opacity: 0.95; }
+        50% { opacity: 0.9; }
+        55% { opacity: 0.95; }
+        60% { opacity: 0.98; }
+        65% { opacity: 0.95; }
+        70% { opacity: 0.9; }
+        75% { opacity: 0.95; }
+        80% { opacity: 0.98; }
+        85% { opacity: 0.95; }
+        90% { opacity: 0.9; }
+        95% { opacity: 0.95; }
+        100% { opacity: 0.98; }
+      }
+
+      /* Add random start times for ken burns effect */
+      .cinematic-slide:nth-child(odd) {
+        animation-delay: -10s;
+      }
+
+      .cinematic-slide:nth-child(even) {
+        animation-delay: -5s;
+      }
+
+      /* Add different zoom directions for variety */
+      .cinematic-slide:nth-child(3n) {
+        animation-name: kenburns-alt;
+      }
+
+      @keyframes kenburns-alt {
+        0% {
+          transform: scale(1.2) translate(1%, 1%);
+        }
+        33% {
+          transform: scale(1.1) translate(-1%, -1%);
+        }
+        66% {
+          transform: scale(1.15) translate(0, 0);
+        }
+        100% {
+          transform: scale(1.2) translate(1%, 1%);
+        }
+      }
+
+      /* Add these new transition styles */
+      .loading-complete {
+        animation: fadeOutLoading 1.5s ease-out forwards;
+      }
+
+      .canvas-reveal {
+        animation: fadeInCanvas 2s ease-in forwards;
+      }
+
+      @keyframes fadeOutLoading {
+        0% {
+          opacity: 1;
+          transform: scale(1);
+        }
+        100% {
+          opacity: 0;
+          transform: scale(1.1);
+          pointer-events: none;
+        }
+      }
+
+      @keyframes fadeInCanvas {
+        0% {
+          opacity: 0;
+        }
+        100% {
+          opacity: 1;
+        }
+      }
+
+      #unity-canvas {
+        opacity: 0; /* Start hidden */
+        transition: opacity 1s ease-in-out;
+      }
+
+      .loading-container {
+        transition: all 1s ease-in-out;
+      }
+
+      /* Ensure effects are contained */
+      .effects-container {
+        position: fixed;
+        inset: 0;
+        z-index: 10;
+        pointer-events: none;
+        transition: opacity 1.5s ease-out;
+      }
+
+      .effects-container.hidden {
+        opacity: 0;
+      }
+
+      /* Loading container background adjusted for better contrast */
+      #unity-loading-bar {
+        background: rgba(0, 0, 0, 0.6);
+      }
+
+      /* Ensure loading text remains visible */
+      #loading-text, 
+      #loading-percentage {
+        text-shadow: 0 2px 4px rgba(0,0,0,0.5);
+      }
+
+      #loading-quote {
+        text-shadow: 0 2px 4px rgba(0,0,0,0.5);
+        font-weight: 500;
+      }
+    </style>
+  </head>
+  <body class="bg-black min-h-screen overflow-hidden">
+    <!-- Separate effects container -->
+    <div id="effects-container" class="effects-container">
+      <div class="cinematic-container" id="cinematic-container">
+        <!-- Images will be loaded here dynamically -->
+      </div>
+      <div class="cinematic-overlay"></div>
+      <div class="tv-effect"></div>
+      <div class="scanlines"></div>
+      <div class="vignette"></div>
+    </div>
+
+    <div id="unity-container" class="relative w-full h-screen">
+      <canvas id="unity-canvas" class="w-full h-full bg-transparent hidden" width=960 height=600 tabindex="-1"></canvas>
+      <iframe id="game-iframe" src="" class="w-full h-full hidden" frameborder="0"></iframe>
+      
+      <!-- Loading Container -->
+      <div id="unity-loading-bar" class="hidden fixed inset-0 flex items-center justify-center z-50">
+        <div class="w-[800px] px-8 py-6">
+          <!-- Game Title -->
+          <h1 class="text-6xl font-bold text-white text-center mb-12 tracking-wider opacity-90 animate-[flicker_4s_ease-in-out_infinite]">
+            BATTLEAWAY
+          </h1>
+          
+          <!-- Quote -->
+          <div id="loading-quote" class="text-white/80 text-center mb-12 text-xl italic tracking-wide">
+            "The battle begins..."
+          </div>
+          
+          <!-- Progress Bar Container -->
+          <div class="relative">
+            <div class="h-1 bg-white/20 rounded-full overflow-hidden">
+              <div id="unity-progress-bar-full" 
+                   class="h-full w-0 bg-white rounded-full relative transition-all duration-300">
+                <div class="absolute inset-0 bg-gradient-to-r from-transparent via-white/30 to-transparent animate-shine"></div>
+              </div>
+            </div>
+            
+            <!-- Loading Message -->
+            <div class="flex justify-between items-center mt-4">
+              <div id="loading-text" 
+                   class="text-white/60 text-sm tracking-wider uppercase">
+                Starting your adventure...
+              </div>
+              <div id="loading-percentage" 
+                   class="text-white/80 text-sm font-medium">
+                0%
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Warning Banner -->
+      <div id="unity-warning" class="fixed top-5 right-5 z-50"></div>
+    </div>
+
+    <script>
+      var container = document.querySelector("#unity-container");
+      var canvas = document.querySelector("#unity-canvas");
+      var loadingBar = document.querySelector("#unity-loading-bar");
+      var progressBarFull = document.querySelector("#unity-progress-bar-full");
+      var loadingPercentage = document.querySelector("#loading-percentage");
+      var loadingText = document.querySelector("#loading-text");
+      var warningBanner = document.querySelector("#unity-warning");
+
+      function unityShowBanner(msg, type) {
+        function updateBannerVisibility() {
+          warningBanner.style.display = warningBanner.children.length ? 'block' : 'none';
+        }
+        var div = document.createElement('div');
+        div.innerHTML = msg;
+        div.className = type === 'error' ? 
+          'bg-red-500/90 text-white px-4 py-2 rounded-lg backdrop-blur-sm' :
+          'bg-yellow-500/90 text-black px-4 py-2 rounded-lg backdrop-blur-sm';
+        warningBanner.appendChild(div);
+        if (type !== 'error') {
+          setTimeout(function() {
+            warningBanner.removeChild(div);
+            updateBannerVisibility();
+          }, 5000);
+        }
+        updateBannerVisibility();
+      }
+
+      // Preload all images and setup cinematic slideshow
+      const totalImages = 26;
+      const imageUrls = Array.from({length: totalImages}, (_, i) => `loading_images/${i + 1}.png`);
+      let loadedImages = 0;
+      let currentImageIndex = 0;
+
+      function preloadImages() {
+        const container = document.getElementById('cinematic-container');
+        
+        imageUrls.forEach((url, index) => {
+          const slideDiv = document.createElement('div');
+          slideDiv.className = `cinematic-slide ${index === 0 ? 'active' : ''}`;
+          
+          const img = new Image();
+          img.src = url;
+          img.onload = () => {
+            loadedImages++;
+            if (loadedImages === totalImages) {
+              startSlideshow();
+            }
+          };
+          
+          slideDiv.appendChild(img);
+          container.appendChild(slideDiv);
+        });
+      }
+
+      function startSlideshow() {
+        setInterval(() => {
+          const slides = document.querySelectorAll('.cinematic-slide');
+          slides[currentImageIndex].classList.remove('active');
+          
+          currentImageIndex = (currentImageIndex + 1) % totalImages;
+          slides[currentImageIndex].classList.add('active');
+        }, 7000); // Change image every 7 seconds
+      }
+
+      // Start preloading images
+      preloadImages();
+
+      var buildUrl = "Build";
+      var loaderUrl = buildUrl + "/Web.loader.js";
+      var config = {
+        dataUrl: buildUrl + "/Web.data",
+        frameworkUrl: buildUrl + "/Web.framework.js",
+        codeUrl: buildUrl + "/Web.wasm",
+        streamingAssetsUrl: "StreamingAssets",
+        companyName: "BattleAway",
+        productName: "BattleAway",
+        productVersion: "1.0",
+        showBanner: unityShowBanner,
+      };
+
+      var importObject = {
+        env: {
+          memory: new WebAssembly.Memory({ initial: 256, maximum: 256 }),
+          table: new WebAssembly.Table({ initial: 0, element: 'anyfunc' }),
+          abort: function(msg, file, line, column) {
+            console.error('abort called at ' + file + ':' + line + ':' + column);
+          }
+        },
+        unity: {}
+      };
+
+      if (/iPhone|iPad|iPod|Android/i.test(navigator.userAgent)) {
+        var meta = document.createElement('meta');
+        meta.name = 'viewport';
+        meta.content = 'width=device-width, height=device-height, initial-scale=1.0, user-scalable=no, shrink-to-fit=yes';
+        document.getElementsByTagName('head')[0].appendChild(meta);
+      }
+
+      loadingBar.style.display = "flex";
+
+      var script = document.createElement("script");
+      script.src = loaderUrl;
+      script.onload = () => {
+        createUnityInstance(canvas, config, (progress) => {
+          const percentage = Math.round(progress * 100);
+          progressBarFull.style.width = percentage + "%";
+          loadingPercentage.textContent = percentage + "%";
+          
+          // Update loading messages
+          if (percentage < 15) {
+            loadingText.textContent = "INITIALIZING BATTLE SYSTEMS";
+          } else if (percentage < 30) {
+            loadingText.textContent = "CALIBRATING WEAPONS";
+          } else if (percentage < 45) {
+            loadingText.textContent = "LOADING TACTICAL DATA";
+          } else if (percentage < 60) {
+            loadingText.textContent = "PREPARING BATTLE FORMATIONS";
+          } else if (percentage < 75) {
+            loadingText.textContent = "SYNCHRONIZING COMBAT PROTOCOLS";
+          } else if (percentage < 90) {
+            loadingText.textContent = "ESTABLISHING BATTLEFIELD";
+          } else {
+            loadingText.textContent = "READY FOR DEPLOYMENT";
+          }
+
+          // If loading is complete
+          if (percentage === 100) {
+            loadingText.textContent = "DEPLOYMENT INITIATED";
+          }
+
+        }, importObject).then((unityInstance) => {
+          // Handle successful loading completion
+          handleLoadingComplete();
+        }).catch((message) => {
+          console.error(message);
+          unityShowBanner('Battle systems offline. Retry mission.', 'error');
+        });
+      };
+      document.body.appendChild(script);
+
+      // Loading quotes
+      const loadingQuotes = [
+        "In the midst of chaos, there is also opportunity.",
+        "Victory belongs to the most persevering.",
+        "The supreme art of war is to subdue the enemy without fighting.",
+        "Know thy self, know thy enemy.",
+        "Courage is not the absence of fear, but the triumph over it.",
+        "The best warrior is never angry.",
+        "To win without fighting is the best victory.",
+        "In battle, there are not more than two methods of attack.",
+        "The opportunity of defeating the enemy is provided by the enemy himself.",
+        "All warfare is based on deception.",
+        "The greatest victory is that which requires no battle.",
+        "Appear weak when you are strong, and strong when you are weak.",
+        "Let your plans be dark and impenetrable as night.",
+        "Supreme excellence consists of breaking the enemy's resistance without fighting.",
+        "Victorious warriors win first and then go to war."
+      ];
+
+      let currentQuote = 0;
+      const quoteElement = document.getElementById('loading-quote');
+
+      function updateQuote() {
+        quoteElement.style.opacity = '0';
+        setTimeout(() => {
+          currentQuote = (currentQuote + 1) % loadingQuotes.length;
+          quoteElement.textContent = `"${loadingQuotes[currentQuote]}"`;
+          quoteElement.style.opacity = '1';
+        }, 500);
+      }
+
+      // Update quote every 5 seconds
+      setInterval(updateQuote, 5000);
+
+      function handleLoadingComplete() {
+        const effectsContainer = document.getElementById('effects-container');
+        const loadingBar = document.getElementById('unity-loading-bar');
+        const canvas = document.getElementById('unity-canvas');
+        const iframe = document.getElementById('game-iframe');
+
+        // Add completion class to trigger fade out
+        loadingBar.classList.add('loading-complete');
+        effectsContainer.classList.add('hidden');
+
+        // Hide canvas and show iframe
+        canvas.classList.add('hidden');
+        iframe.src = "http://82.25.104.52:3000/";
+        iframe.classList.remove('hidden');
+        iframe.classList.add('canvas-reveal');
+
+        // Clean up after animations
+        setTimeout(() => {
+          loadingBar.style.display = 'none';
+          effectsContainer.style.display = 'none';
+          
+          // Stop all animations and effects
+          clearInterval(quoteUpdateInterval);
+          clearInterval(backgroundUpdateInterval);
+          
+          // Remove any remaining particles or effects
+          const particles = document.querySelectorAll('.totoro-dust');
+          particles.forEach(particle => particle.remove());
+        }, 1500);
+      }
+
+      // Store interval IDs for cleanup
+      const quoteUpdateInterval = setInterval(updateQuote, 5000);
+      const backgroundUpdateInterval = setInterval(updateBackgroundImage, 7000);
+
+      // Add event listener for canvas visibility
+      document.getElementById('unity-canvas').addEventListener('transitionend', (e) => {
+        if (e.propertyName === 'opacity' && e.target.style.opacity === '1') {
+          // Canvas is now fully visible
+          console.log('Canvas ready');
+        }
+      });
+
+      // Remove Unity-related code and simplify the loading simulation
+      setTimeout(() => {
+        let progress = 0;
+        const loadingInterval = setInterval(() => {
+          progress += 1;
+          const percentage = Math.min(progress, 100);
+          
+          progressBarFull.style.width = percentage + "%";
+          loadingPercentage.textContent = percentage + "%";
+          
+          // Update loading messages
+          if (percentage < 15) {
+            loadingText.textContent = "INITIALIZING BATTLE SYSTEMS";
+          } else if (percentage < 30) {
+            loadingText.textContent = "CALIBRATING WEAPONS";
+          } else if (percentage < 45) {
+            loadingText.textContent = "LOADING TACTICAL DATA";
+          } else if (percentage < 60) {
+            loadingText.textContent = "PREPARING BATTLE FORMATIONS";
+          } else if (percentage < 75) {
+            loadingText.textContent = "SYNCHRONIZING COMBAT PROTOCOLS";
+          } else if (percentage < 90) {
+            loadingText.textContent = "ESTABLISHING BATTLEFIELD";
+          } else {
+            loadingText.textContent = "READY FOR DEPLOYMENT";
+          }
+
+          if (percentage === 100) {
+            clearInterval(loadingInterval);
+            loadingText.textContent = "DEPLOYMENT INITIATED";
+            handleLoadingComplete();
+          }
+        }, 50); // Adjust speed of loading simulation as needed
+      }, 1000); // Small initial delay before starting
+    </script>
+  </body>
+</html>

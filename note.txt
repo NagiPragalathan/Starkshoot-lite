@@ -1,0 +1,15 @@
+330 uncomment that "username.interactable = false;"
+
+
+ui adivanguthu
+video varala 
+back button in joining ui 
+
+remove loadbutton
+
+
+
+once the data is in get fetched from non debug mode then the room name and time should not be edtiable also if the all of the data is automaticaly fetched then start the game automaticaly dont wait for click the button..
+
+
+Doubt commit added on 30-05-25. 1:25

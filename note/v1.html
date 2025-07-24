@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Photon Room List</title>
+    <script src="./photon.js"></script>
+</head>
+<body>
+    <h1>Photon Rooms</h1>
+    <div id="status">Connecting...</div>
+    <div id="controls">
+        <input type="text" id="roomName" placeholder="Room name">
+        <button onclick="createRoom()">Create Room</button>
+        <button onclick="joinRoom()">Join Room</button>
+        <button onclick="joinRandomRoom()">Join Random Room</button>
+        <button onclick="leaveRoom()">Leave Room</button>
+    </div>
+    <ul id="roomList"></ul>
+
+    <script>
+        let client;
+        
+        window.onload = function() {
+            const appId = "67d44a00-4f4b-437e-b8b5-a3305f2522c8";
+            
+            // Initialize client with proper protocol
+            client = new Photon.LoadBalancing.LoadBalancingClient(
+                Photon.ConnectionProtocol.Wss,
+                appId,
+                "1.0"
+            );
+
+            const statusDiv = document.getElementById("status");
+
+            client.onStateChange = function(state) {
+                let stateText;
+                switch(state) {
+                    case 0: stateText = "Error"; break;
+                    case 1: stateText = "Uninitialized"; break;
+                    case 2: stateText = "ConnectingToNameServer"; break;
+                    case 3: 
+                        stateText = "ConnectedToNameServer";
+                        console.log("Connected to NameServer, connecting to Master...");
+                        break;
+                    case 4: stateText = "ConnectingToMasterserver"; break;
+                    case 5: 
+                        stateText = "ConnectedToMaster";
+                        console.log("Connected to Master, joining lobby...");
+                        // Don't call connect here
+                        break;
+                    case 6: 
+                        stateText = "JoinedLobby";
+                        console.log("Joined lobby, getting room list...");
+                        break;
+                    case 7: stateText = "ConnectingToGameserver"; break;
+                    case 8: stateText = "ConnectedToGameserver"; break;
+                    case 9: 
+                        stateText = "Joined";
+                        console.log("Joined room:", client.myRoom().name);
+                        break;
+                    case 10: 
+                        stateText = "Disconnected";
+                        client.connectToRegionMaster("eu"); // Reconnect if disconnected
+                        break;
+                    default: stateText = "Unknown State: " + state;
+                }
+                
+                console.log("State:", stateText);
+                statusDiv.textContent = "State: " + stateText;
+            };
+
+            // Handle room list updates
+            client.onRoomList = function(rooms) {
+                console.log("Room list updated:", rooms);
+                updateRoomList(rooms);
+            };
+
+            client.onRoomListUpdate = function(rooms) {
+                console.log("Room list update:", rooms);
+                updateRoomList(rooms);
+            };
+
+            // Handle joining room
+            client.onJoinRoom = function(createdByMe) {
+                console.log("Joined room:", client.myRoom().name, "Created:", createdByMe);
+                statusDiv.textContent = "Joined room: " + client.myRoom().name;
+            };
+
+            client.onError = function(errorCode, errorMsg) {
+                console.error("Error:", errorCode, errorMsg);
+                statusDiv.textContent = `Error: ${errorMsg} (${errorCode})`;
+            };
+
+            // Connect to Photon Cloud
+            client.connectToRegionMaster("eu");
+        };
+
+        function updateRoomList(rooms) {
+            const listEl = document.getElementById("roomList");
+            listEl.innerHTML = "";
+            
+            if (!rooms || rooms.length === 0) {
+                listEl.innerHTML = "<li>No rooms available</li>";
+                return;
+            }
+
+            rooms.forEach(room => {
+                const li = document.createElement("li");
+                li.textContent = `Room: ${room.name} (${room.playerCount}/${room.maxPlayers} players)`;
+                listEl.appendChild(li);
+            });
+        }
+
+        function createRoom() {
+            const roomName = document.getElementById("roomName").value || "Room_" + Math.random().toString(36).substr(2, 9);
+            const options = {
+                isVisible: true,
+                isOpen: true,
+                maxPlayers: 4,
+                emptyRoomTTL: 10000
+            };
+            try {
+                client.createRoom(roomName, options);
+            } catch (error) {
+                console.error("Failed to create room:", error);
+            }
+        }
+
+        function joinRoom() {
+            const roomName = document.getElementById("roomName").value;
+            if (roomName) {
+                try {
+                    client.joinRoom(roomName);
+                } catch (error) {
+                    console.error("Failed to join room:", error);
+                }
+            } else {
+                alert("Please enter a room name");
+            }
+        }
+
+        function joinRandomRoom() {
+            try {
+                client.joinRandomRoom();
+            } catch (error) {
+                console.error("Failed to join random room:", error);
+            }
+        }
+
+        function leaveRoom() {
+            try {
+                if (client.isJoinedToRoom()) {
+                    client.leaveRoom();
+                }
+            } catch (error) {
+                console.error("Failed to leave room:", error);
+            }
+        }
+    </script>
+</body>
+</html>
