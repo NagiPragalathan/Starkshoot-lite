@@ -1,6 +1,7 @@
 using UnityEngine;
 using Photon.Pun;
 
+[RequireComponent(typeof(PhotonView))]
 public class TrainPlatform : MonoBehaviourPunCallbacks, IPunObservable
 {
     [Header("Position References")]
@@ -21,6 +22,26 @@ public class TrainPlatform : MonoBehaviourPunCallbacks, IPunObservable
     private Vector3 networkPosition;
     private Vector3 velocity;
     private float lerpSpeed = 15f;
+    private PhotonView photonView;
+
+    void Awake()
+    {
+        photonView = GetComponent<PhotonView>();
+        if (photonView == null)
+        {
+            Debug.LogError("PhotonView missing on TrainPlatform!");
+            photonView = gameObject.AddComponent<PhotonView>();
+        }
+        
+        // Make sure this component is observed by PhotonView
+        if (!photonView.ObservedComponents.Contains(this))
+        {
+            photonView.ObservedComponents.Add(this);
+        }
+        
+        // Configure PhotonView settings
+        photonView.Synchronization = ViewSynchronization.UnreliableOnChange;
+    }
 
     private void Start()
     {
@@ -39,7 +60,7 @@ public class TrainPlatform : MonoBehaviourPunCallbacks, IPunObservable
         transform.position = startPosition;
         networkPosition = startPosition;
 
-        Debug.Log($"Train initialized - Start: {startPosition}, End: {endPosition}");
+        Debug.Log($"Train initialized - Start: {startPosition}, End: {endPosition}, IsMaster: {PhotonNetwork.IsMasterClient}");
     }
 
     private void Update()
