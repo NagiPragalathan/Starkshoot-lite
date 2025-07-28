@@ -159,14 +159,17 @@ public class PlayerNetworkMover : MonoBehaviourPunCallbacks, IPunObservable {
     }
 
     void OnControllerColliderHit(ControllerColliderHit hit) {
+        float start_value = 0.0f;
         if (!photonView.IsMine) return;
 
         if (hit.gameObject.CompareTag("MovingPlatform")) {
+            start_value = transform.position.y;
             // Check if we're standing on the platform (using dot product with up vector)
             if (Vector3.Dot(hit.normal, Vector3.up) > 0.5f) {
                 Debug.Log("Standing on platform!");
                 platformParent = hit.transform;
                 lastPlatformPosition = platformParent.position;
+                lastPlatformPosition.y = start_value;
                 isOnPlatform = true;
             }
         }
