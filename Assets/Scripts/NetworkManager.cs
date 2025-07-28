@@ -1990,51 +1990,64 @@ public class NetworkManager : MonoBehaviourPunCallbacks {
         Vector3 spawnPosition = spawnPoints[spawnIndex].position;
         Quaternion spawnRotation = spawnPoints[spawnIndex].rotation;
 
-        // Verify spawn point is on NavMesh
+        // Verify spawn point is on NavMesh and not too close to other NPCs
         NavMeshHit hit;
         if (NavMesh.SamplePosition(spawnPosition, out hit, 1.0f, NavMesh.AllAreas))
         {
+            // Check if position is clear of other NPCs
+            Collider[] colliders = Physics.OverlapSphere(hit.position, 2f);
+            foreach (Collider col in colliders)
+            {
+                if (col.CompareTag("NPC"))
+                {
+                    Debug.Log("[SPAWN] Position occupied by another NPC, finding new position");
+                    return SpawnNPC(); // Try again with a different position
+                }
+            }
             spawnPosition = hit.position;
-        }
-        
-        // Check that we have the NPC prefab
-        if (npcPrefab == null)
-        {
-            Debug.LogError("NPC Prefab is null! Cannot spawn NPC.");
-            return null;
         }
         
         try
         {
-            // Instantiate the NPC with explicit ownership
-            GameObject npc = PhotonNetwork.Instantiate(npcPrefab.name, spawnPosition, spawnRotation, 0);
+            // Set spawn properties
+            object[] instantiationData = new object[]
+            {
+                spawnPosition,
+                spawnRotation.eulerAngles,
+                PhotonNetwork.Time // Send spawn time for better sync
+            };
+
+            // Instantiate the NPC with instantiation data
+            GameObject npc = PhotonNetwork.Instantiate(npcPrefab.name, spawnPosition, spawnRotation, 0, instantiationData);
             
             if (npc != null)
             {
                 PhotonView pv = npc.GetComponent<PhotonView>();
-                Debug.Log($"NPC spawned with PhotonView ID: {pv.ViewID} at position: {spawnPosition}");
-                
-                // Ensure the master client owns this NPC
-                if (pv.Owner != PhotonNetwork.LocalPlayer)
+                if (pv != null)
                 {
-                    pv.TransferOwnership(PhotonNetwork.LocalPlayer);
+                    Debug.Log($"NPC spawned with PhotonView ID: {pv.ViewID} at position: {spawnPosition}");
+                    
+                    // Ensure the master client owns this NPC
+                    if (!pv.IsMine)
+                    {
+                        pv.RequestOwnership();
+                    }
+                    
+                    // Initialize NPC with RPC to ensure all clients are in sync
+                    pv.RPC("InitializeNPCRPC", RpcTarget.All, pv.ViewID);
+                    
+                    // Add to tracking list
+                    if (!activeNPCs.Contains(npc))
+                    {
+                        activeNPCs.Add(npc);
+                    }
+                    
+                    return npc;
                 }
-                
-                SetupNPC(npc);
-                
-                // Add to our tracking list
-                if (!activeNPCs.Contains(npc))
-                {
-                    activeNPCs.Add(npc);
-                }
-                
-                return npc;
             }
-            else
-            {
-                Debug.LogError("Failed to instantiate NPC prefab!");
-                return null;
-            }
+            
+            Debug.LogError("Failed to instantiate NPC prefab!");
+            return null;
         }
         catch (System.Exception e)
         {
@@ -2047,124 +2060,86 @@ public class NetworkManager : MonoBehaviourPunCallbacks {
     {
         if (npc == null) return;
         
-        // Set proper scale (1.5x is larger than player)
-        npc.transform.localScale = new Vector3(1.5f, 1.5f, 1.5f);
-        
-        // Set up NPC-specific components
-        npc.tag = "NPC";
-        npc.layer = LayerMask.NameToLayer("Shootable");
-        
-        // Get PhotonView
-        PhotonView photonView = npc.GetComponent<PhotonView>();
-        if (photonView == null)
+        try
         {
-            Debug.LogError("NPC is missing PhotonView component!");
-            return;
-        }
-        
-        // Add unique name to help with debugging
-        npc.name = $"NPC_{photonView.ViewID}";
-        
-        // Setup components
-        NPCController npcController = npc.GetComponent<NPCController>();
-        if (npcController == null)
-        {
-            npcController = npc.AddComponent<NPCController>();
-        }
-        
-        // Ensure animator component is active
-        Animator animator = npc.GetComponent<Animator>();
-        if (animator == null)
-        {
-            animator = npc.GetComponentInChildren<Animator>();
-        }
-        
-        // If still no animator found, log error
-        if (animator == null)
-        {
-            Debug.LogError($"NPC {npc.name} has no Animator component!");
-        }
-        else
-        {
-            // Make sure animator is enabled and reset
-            animator.enabled = true;
-            animator.Rebind();
-            animator.Update(0f);
-            Debug.Log($"NPC {npc.name} animator initialized");
-        }
-        
-        // Configure NavMeshAgent with unique settings to avoid stacking
-        NavMeshAgent agent = npc.GetComponent<NavMeshAgent>();
-        if (agent != null)
-        {
-            agent.height = 1.8f;
-            agent.radius = 0.5f;
-            agent.baseOffset = 0f;
-            agent.speed = Random.Range(3.0f, 4.0f); // Slightly different speeds
-            agent.acceleration = 12f;
-            agent.angularSpeed = 180f;
-            agent.stoppingDistance = 1f;
-            agent.avoidancePriority = Random.Range(20, 80); // Different priorities
+            // Set proper scale (1.5x is larger than player)
+            npc.transform.localScale = new Vector3(1.5f, 1.5f, 1.5f);
             
-            // Ensure agent is on NavMesh
-            NavMeshHit hit;
-            if (NavMesh.SamplePosition(npc.transform.position, out hit, 1.0f, NavMesh.AllAreas))
+            // Set up NPC-specific components
+            npc.tag = "NPC";
+            npc.layer = LayerMask.NameToLayer("Shootable");
+            
+            // Get PhotonView
+            PhotonView photonView = npc.GetComponent<PhotonView>();
+            if (photonView == null)
             {
-                agent.Warp(hit.position);
+                Debug.LogError("NPC is missing PhotonView component!");
+                return;
             }
-        }
+            
+            // Add unique name to help with debugging
+            npc.name = $"NPC_{photonView.ViewID}";
+            
+            // Setup components
+            NPCController npcController = npc.GetComponent<NPCController>();
+            if (npcController == null)
+            {
+                npcController = npc.AddComponent<NPCController>();
+            }
+            
+            // Configure NavMeshAgent with unique settings
+            NavMeshAgent agent = npc.GetComponent<NavMeshAgent>();
+            if (agent != null)
+            {
+                agent.height = 1.8f;
+                agent.radius = 0.5f;
+                agent.baseOffset = 0f;
+                agent.speed = Random.Range(3.0f, 4.0f);
+                agent.acceleration = 12f;
+                agent.angularSpeed = 180f;
+                agent.stoppingDistance = 1f;
+                agent.avoidancePriority = Random.Range(20, 80);
+                
+                // Ensure agent is on NavMesh
+                NavMeshHit hit;
+                if (NavMesh.SamplePosition(npc.transform.position, out hit, 1.0f, NavMesh.AllAreas))
+                {
+                    agent.Warp(hit.position);
+                }
+                
+                // Set update rotation to false to handle rotation manually
+                agent.updateRotation = false;
+            }
 
-        // Configure collider to match player size
-        CapsuleCollider collider = npc.GetComponent<CapsuleCollider>();
-        if (collider != null)
-        {
-            collider.height = 1.8f;
-            collider.radius = 0.5f;
-            collider.center = new Vector3(0, 0.9f, 0);
+            // Configure collider
+            CapsuleCollider collider = npc.GetComponent<CapsuleCollider>();
+            if (collider != null)
+            {
+                collider.height = 1.8f;
+                collider.radius = 0.5f;
+                collider.center = new Vector3(0, 0.9f, 0);
+                collider.isTrigger = false; // Ensure it's not a trigger
+            }
+            
+            // Setup Rigidbody for better physics handling
+            Rigidbody rb = npc.GetComponent<Rigidbody>();
+            if (rb != null)
+            {
+                rb.isKinematic = false;
+                rb.useGravity = true;
+                rb.constraints = RigidbodyConstraints.FreezeRotation;
+                rb.interpolation = RigidbodyInterpolation.Interpolate;
+                rb.collisionDetectionMode = CollisionDetectionMode.Continuous;
+            }
+            
+            // Force the NPC to initialize
+            npcController.InitializeNPC();
+            
+            Debug.Log($"NPC {npc.name} setup completed successfully");
         }
-        
-        // Setup health component
-        NPCHealth npcHealth = npc.GetComponent<NPCHealth>();
-        if (npcHealth == null)
+        catch (System.Exception e)
         {
-            npcHealth = npc.AddComponent<NPCHealth>();
-        }
-
-        // Force the NPC to initialize
-        npcController.InitializeNPC();
-        
-        // Force initialize on all clients
-        photonView.RPC("InitializeRemoteNPC", RpcTarget.Others);
-    }
-
-    [PunRPC]
-    private void InitializeRemoteNPC()
-    {
-        // This is called on client side to ensure the NPC is properly initialized
-        NPCController controller = GetComponent<NPCController>();
-        if (controller != null)
-        {
-            controller.InitializeNPC();
-        }
-        
-        // Set proper scale
-        transform.localScale = new Vector3(1.5f, 1.5f, 1.5f);
-        
-        // Get the animator component
-        Animator animator = GetComponent<Animator>();
-        if (animator == null)
-        {
-            animator = GetComponentInChildren<Animator>();
-        }
-        
-        // Check if animator exists before using it
-        if (animator != null)
-        {
-            animator.enabled = true;
-            animator.applyRootMotion = false;
-            animator.Rebind();
-            animator.Update(0f);
-            Debug.Log($"Remote NPC {photonView.ViewID} animator initialized");
+            Debug.LogError($"Error in SetupNPC: {e.Message}\n{e.StackTrace}");
         }
     }
 

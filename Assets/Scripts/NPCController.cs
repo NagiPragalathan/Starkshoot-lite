@@ -443,22 +443,36 @@ public class NPCController : MonoBehaviourPunCallbacks, IPunObservable
 
     private void UpdateClient()
     {
-        // Non-master clients interpolate position and rotation
-        float timeSinceLastUpdate = Time.time - lastNetworkUpdateTime;
-        float lerpFactor = Mathf.Clamp01(timeSinceLastUpdate / NETWORK_SYNC_INTERVAL);
-
-        // Smooth position interpolation
-        if (Vector3.Distance(transform.position, networkPosition) > MIN_MOVEMENT_THRESHOLD)
+        if (!photonView.IsMine && !isDead)
         {
-            Vector3 targetPosition = Vector3.Lerp(lastNetworkPosition, networkPosition, lerpFactor);
-            transform.position = Vector3.SmoothDamp(transform.position, targetPosition, ref currentVelocityRef, 0.1f);
+            // Calculate interpolation factor
+            float timeSinceLastUpdate = Time.time - lastNetworkUpdateTime;
+            float interpolationFactor = timeSinceLastUpdate / NETWORK_SYNC_INTERVAL;
+            
+            // Smoothly interpolate position
+            transform.position = Vector3.Lerp(transform.position, networkPosition, Time.deltaTime * networkLerpSpeed);
+            
+            // Smoothly interpolate rotation
             transform.rotation = Quaternion.Lerp(transform.rotation, networkRotation, Time.deltaTime * networkLerpSpeed);
-        }
-
-        // Update agent position if available
-        if (agent != null && agent.isOnNavMesh)
-        {
-            agent.nextPosition = transform.position;
+            
+            // Update animator parameters smoothly
+            animator.SetFloat("Horizontal", Mathf.Lerp(animator.GetFloat("Horizontal"), networkHorizontal, Time.deltaTime / animationSmoothTime));
+            animator.SetFloat("Vertical", Mathf.Lerp(animator.GetFloat("Vertical"), networkVertical, Time.deltaTime / animationSmoothTime));
+            animator.SetBool("Running", networkIsRunning);
+            
+            // Update agent velocity for smoother movement
+            if (agent.enabled)
+            {
+                agent.velocity = networkVelocity;
+            }
+            
+            // If we're too far from the network position, teleport
+            float distanceToNetwork = Vector3.Distance(transform.position, networkPosition);
+            if (distanceToNetwork > 5f)
+            {
+                transform.position = networkPosition;
+                transform.rotation = networkRotation;
+            }
         }
     }
 
@@ -779,65 +793,55 @@ public class NPCController : MonoBehaviourPunCallbacks, IPunObservable
     {
         if (stream.IsWriting)
         {
-            // Send transform data
+            // Send position, rotation, and movement data
             stream.SendNext(transform.position);
             stream.SendNext(transform.rotation);
-            
-            // Send agent and animation data
-            if (agent != null)
-            {
-                stream.SendNext(agent.velocity);
-                stream.SendNext(agent.destination);
-                stream.SendNext(agent.isStopped);
-                
-                // Send current animation values
-                stream.SendNext(networkHorizontal);
-                stream.SendNext(networkVertical);
-                stream.SendNext(networkIsRunning);
-            }
-            else
-            {
-                stream.SendNext(Vector3.zero);
-                stream.SendNext(transform.position);
-                stream.SendNext(false);
-                stream.SendNext(0f);
-                stream.SendNext(0f);
-                stream.SendNext(false);
-            }
-            
+            stream.SendNext(agent.velocity);
+            stream.SendNext(agent.destination);
             stream.SendNext(isDead);
-            stream.SendNext(isMoving);
+            
+            // Send animation parameters
+            stream.SendNext(animator.GetFloat("Horizontal"));
+            stream.SendNext(animator.GetFloat("Vertical"));
+            stream.SendNext(animator.GetBool("Running"));
         }
         else
         {
-            // Receive transform data
-            lastNetworkPosition = transform.position;
-            lastNetworkRotation = transform.rotation;
+            // Receive position and rotation
             networkPosition = (Vector3)stream.ReceiveNext();
             networkRotation = (Quaternion)stream.ReceiveNext();
-            
-            // Receive agent and animation data
             networkVelocity = (Vector3)stream.ReceiveNext();
-            Vector3 destination = (Vector3)stream.ReceiveNext();
-            bool isStopped = (bool)stream.ReceiveNext();
+            Vector3 newDestination = (Vector3)stream.ReceiveNext();
+            bool newIsDead = (bool)stream.ReceiveNext();
+
+            // Calculate network lag
+            float lag = Mathf.Abs((float)(PhotonNetwork.Time - info.SentServerTime));
             
-            // Receive animation values
+            // Extrapolate position based on velocity and lag
+            networkPosition += networkVelocity * lag;
+            
+            // Update agent destination if changed significantly
+            if (Vector3.Distance(agent.destination, newDestination) > 0.1f)
+            {
+                agent.destination = newDestination;
+            }
+
+            // Update death state if changed
+            if (isDead != newIsDead)
+            {
+                isDead = newIsDead;
+                if (isDead)
+                {
+                    PlayDeathAnimation();
+                }
+            }
+
+            // Receive animation parameters
             networkHorizontal = (float)stream.ReceiveNext();
             networkVertical = (float)stream.ReceiveNext();
             networkIsRunning = (bool)stream.ReceiveNext();
             
-            // Update agent if available
-            if (agent != null && agent.isOnNavMesh)
-            {
-                if (!isStopped && Vector3.Distance(agent.destination, destination) > 0.1f)
-                {
-                    agent.destination = destination;
-                }
-                agent.isStopped = isStopped;
-            }
-            
-            isDead = (bool)stream.ReceiveNext();
-            isMoving = (bool)stream.ReceiveNext();
+            // Record the time when we received new network data
             lastNetworkUpdateTime = Time.time;
         }
     }
