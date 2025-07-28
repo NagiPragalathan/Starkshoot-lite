@@ -54,6 +54,12 @@ public class NPCHealth : MonoBehaviourPunCallbacks, IPunObservable
     private float lastNetworkPositionUpdate;
     private const float NETWORK_SMOOTHING = 10f;
 
+    // Add after the existing network variables
+    private float lastSyncTime;
+    private const float SYNC_INTERVAL = 0.05f; // 20 updates per second
+    private Vector3 lastSyncPosition;
+    private Quaternion lastSyncRotation;
+
     // Add these new variables
     private static readonly string[] BotFirstNames = {
         "Bot_Alpha", "Bot_Beta", "Bot_Delta", "Bot_Echo", 
@@ -131,26 +137,25 @@ public class NPCHealth : MonoBehaviourPunCallbacks, IPunObservable
             return;
         }
 
-        // Only interpolate position if we're not the Master Client
+        // Only interpolate position if we're not the Master Client and not dead
         if (!PhotonNetwork.IsMasterClient && !isDead)
         {
-            // Smoothly move to the network position
-            transform.position = Vector3.Lerp(transform.position, networkPosition, Time.deltaTime * NETWORK_SMOOTHING);
-            transform.rotation = Quaternion.Lerp(transform.rotation, networkRotation, Time.deltaTime * NETWORK_SMOOTHING);
+            float timeSinceLastSync = (Time.time - lastSyncTime) / SYNC_INTERVAL;
+            transform.position = Vector3.Lerp(lastSyncPosition, networkPosition, timeSinceLastSync);
+            transform.rotation = Quaternion.Lerp(lastSyncRotation, networkRotation, timeSinceLastSync);
         }
+
+        UpdateNameTagVisibility();
     }
 
     [PunRPC]
     public void TakeDamage(int amount, string attackerName)
     {
-        // Process damage regardless of who is the master client
-        Debug.Log($"TakeDamage RPC called on NPC {BotName}. Current Health: {currentHealth}, Damage: {amount} from {attackerName}");
-        
         if (isDead) return;
 
-        // Apply damage
+        // Process damage
         currentHealth -= amount;
-        Debug.Log($"NPC Health after damage: {currentHealth}");
+        Debug.Log($"NPC {BotName} took {amount} damage from {attackerName}. Health: {currentHealth}");
 
         // Synchronize the damage animation and effects across all clients
         photonView.RPC("SyncDamageEffects", RpcTarget.All);
@@ -158,8 +163,30 @@ public class NPCHealth : MonoBehaviourPunCallbacks, IPunObservable
         // Check for death
         if (currentHealth <= 0 && !isDead)
         {
-            // Ensure ALL clients know this NPC died, not just the master
             photonView.RPC("ProcessDeath", RpcTarget.All, attackerName);
+        }
+
+        // Force immediate position sync after damage
+        if (PhotonNetwork.IsMasterClient)
+        {
+            photonView.RPC("SyncPosition", RpcTarget.All, transform.position, transform.rotation.eulerAngles);
+        }
+    }
+
+    [PunRPC]
+    private void SyncPosition(Vector3 position, Vector3 rotation)
+    {
+        if (!isDead)
+        {
+            transform.position = position;
+            transform.rotation = Quaternion.Euler(rotation);
+            
+            // Update network positions for interpolation
+            networkPosition = position;
+            networkRotation = transform.rotation;
+            lastSyncPosition = position;
+            lastSyncRotation = transform.rotation;
+            lastSyncTime = Time.time;
         }
     }
 
@@ -298,18 +325,24 @@ public class NPCHealth : MonoBehaviourPunCallbacks, IPunObservable
             stream.SendNext(currentHealth);
             stream.SendNext(isDead);
             stream.SendNext(BotName);
+            stream.SendNext(isSinking);
         }
         else
         {
-            // Receive position, rotation, health data, and isDead state
+            // Store last sync values for interpolation
+            lastSyncPosition = transform.position;
+            lastSyncRotation = transform.rotation;
+            
+            // Receive new values
             networkPosition = (Vector3)stream.ReceiveNext();
             networkRotation = (Quaternion)stream.ReceiveNext();
             currentHealth = (int)stream.ReceiveNext();
             isDead = (bool)stream.ReceiveNext();
             BotName = (string)stream.ReceiveNext();
+            isSinking = (bool)stream.ReceiveNext();
             
-            // Update the last network position time
-            lastNetworkPositionUpdate = Time.time;
+            // Update sync time
+            lastSyncTime = Time.time;
         }
     }
 

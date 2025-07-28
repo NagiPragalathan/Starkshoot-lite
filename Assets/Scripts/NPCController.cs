@@ -67,6 +67,26 @@ public class NPCController : MonoBehaviourPunCallbacks, IPunObservable
     private NPCTpsGun npcGun;
     private Transform currentTarget;
 
+    // Add these network sync variables at the top of the class after other private variables
+    private Vector3 networkPosition;
+    private Quaternion networkRotation;
+    private Vector3 lastNetworkPosition;
+    private Quaternion lastNetworkRotation;
+    private float lastNetworkUpdateTime;
+    private const float NETWORK_SYNC_INTERVAL = 0.05f; // 20 updates per second
+    private const float MIN_MOVEMENT_THRESHOLD = 0.001f;
+
+    // Add these variables after the network sync variables
+    private float networkHorizontal;
+    private float networkVertical;
+    private bool networkIsRunning;
+    private Vector3 networkVelocity;
+    private float networkLerpSpeed = 15f;
+    private float animationSmoothTime = 0.2f;
+    private Vector3 currentVelocityRef;
+    private float lastAnimationSyncTime;
+    private const float ANIMATION_SYNC_INTERVAL = 0.1f; // Sync animations 10 times per second
+
     private void Awake()
     {
         // Get components
@@ -377,48 +397,82 @@ public class NPCController : MonoBehaviourPunCallbacks, IPunObservable
     {
         if (isDead) return;
 
-        // Check for wall collisions and correct position
         if (PhotonNetwork.IsMasterClient)
         {
-            CheckAndCorrectWallCollision();
-            
-            // Debug ray to visualize wall detection
-            Debug.DrawRay(transform.position, transform.forward * minWallDistance, Color.red);
-            Debug.DrawRay(transform.position, -transform.forward * minWallDistance, Color.red);
-            Debug.DrawRay(transform.position, transform.right * minWallDistance, Color.red);
-            Debug.DrawRay(transform.position, -transform.right * minWallDistance, Color.red);
+            UpdateMasterClient();
+        }
+        else
+        {
+            UpdateClient();
         }
 
-        // Master client controls the NPC movement and behavior
-        if (PhotonNetwork.IsMasterClient)
-        {
-            // Update animation based on movement
-            if (animator != null && agent != null)
-            {
-                Vector3 velocity = agent.velocity;
-                float speed = velocity.magnitude;
-                
-                Vector3 localVelocity = transform.InverseTransformDirection(velocity);
-                float forward = localVelocity.z;
-                float sideways = localVelocity.x;
+        // Update animations for both master and clients
+        UpdateAnimations();
+    }
 
-                // Set animator parameters locally
-                animator.SetFloat(hashHorizontal, sideways / agent.speed);
-                animator.SetFloat(hashVertical, forward / agent.speed);
-                animator.SetBool(hashRunning, speed > 0.1f);
-                
-                // Update movement status
-                isMoving = speed > 0.1f;
-                
-                // Sync animation parameters
-                if (photonView.IsMine)
-                {
-                    photonView.RPC("SyncAnimationParameters", RpcTarget.Others, 
-                        sideways / agent.speed, 
-                        forward / agent.speed, 
-                        speed > 0.1f);
-                }
+    private void UpdateMasterClient()
+    {
+        CheckAndCorrectWallCollision();
+        
+        // Debug ray to visualize wall detection
+        Debug.DrawRay(transform.position, transform.forward * minWallDistance, Color.red);
+        Debug.DrawRay(transform.position, -transform.forward * minWallDistance, Color.red);
+        Debug.DrawRay(transform.position, transform.right * minWallDistance, Color.red);
+        Debug.DrawRay(transform.position, -transform.right * minWallDistance, Color.red);
+
+        // Calculate movement values
+        if (agent != null)
+        {
+            Vector3 velocity = agent.velocity;
+            float speed = velocity.magnitude;
+            
+            Vector3 localVelocity = transform.InverseTransformDirection(velocity);
+            networkHorizontal = localVelocity.x / agent.speed;
+            networkVertical = localVelocity.z / agent.speed;
+            networkIsRunning = speed > 0.1f;
+            isMoving = speed > 0.1f;
+
+            // Sync animations more frequently
+            if (Time.time - lastAnimationSyncTime > ANIMATION_SYNC_INTERVAL)
+            {
+                photonView.RPC("SyncAnimationState", RpcTarget.All, networkHorizontal, networkVertical, networkIsRunning);
+                lastAnimationSyncTime = Time.time;
             }
+        }
+    }
+
+    private void UpdateClient()
+    {
+        // Non-master clients interpolate position and rotation
+        float timeSinceLastUpdate = Time.time - lastNetworkUpdateTime;
+        float lerpFactor = Mathf.Clamp01(timeSinceLastUpdate / NETWORK_SYNC_INTERVAL);
+
+        // Smooth position interpolation
+        if (Vector3.Distance(transform.position, networkPosition) > MIN_MOVEMENT_THRESHOLD)
+        {
+            Vector3 targetPosition = Vector3.Lerp(lastNetworkPosition, networkPosition, lerpFactor);
+            transform.position = Vector3.SmoothDamp(transform.position, targetPosition, ref currentVelocityRef, 0.1f);
+            transform.rotation = Quaternion.Lerp(transform.rotation, networkRotation, Time.deltaTime * networkLerpSpeed);
+        }
+
+        // Update agent position if available
+        if (agent != null && agent.isOnNavMesh)
+        {
+            agent.nextPosition = transform.position;
+        }
+    }
+
+    private void UpdateAnimations()
+    {
+        if (animator != null)
+        {
+            // Apply animation parameters with smoothing
+            animator.SetFloat(hashHorizontal, networkHorizontal, animationSmoothTime, Time.deltaTime);
+            animator.SetFloat(hashVertical, networkVertical, animationSmoothTime, Time.deltaTime);
+            animator.SetBool(hashRunning, networkIsRunning);
+
+            // Ensure animation states are properly set
+            animator.SetBool(hashIsDead, isDead);
         }
     }
 
@@ -706,12 +760,17 @@ public class NPCController : MonoBehaviourPunCallbacks, IPunObservable
     }
     
     [PunRPC]
-    private void SyncAnimationParameters(float horizontal, float vertical, bool isRunning)
+    private void SyncAnimationState(float horizontal, float vertical, bool isRunning)
     {
+        networkHorizontal = horizontal;
+        networkVertical = vertical;
+        networkIsRunning = isRunning;
+
+        // Force immediate update for smoother transitions
         if (animator != null)
         {
-            animator.SetFloat(hashHorizontal, horizontal);
-            animator.SetFloat(hashVertical, vertical);
+            animator.SetFloat(hashHorizontal, horizontal, animationSmoothTime, Time.deltaTime);
+            animator.SetFloat(hashVertical, vertical, animationSmoothTime, Time.deltaTime);
             animator.SetBool(hashRunning, isRunning);
         }
     }
@@ -720,19 +779,27 @@ public class NPCController : MonoBehaviourPunCallbacks, IPunObservable
     {
         if (stream.IsWriting)
         {
-            // Master client sends data
+            // Send transform data
             stream.SendNext(transform.position);
             stream.SendNext(transform.rotation);
             
-            // Send animation parameters
-            if (animator != null)
+            // Send agent and animation data
+            if (agent != null)
             {
-                stream.SendNext(animator.GetFloat(hashHorizontal));
-                stream.SendNext(animator.GetFloat(hashVertical));
-                stream.SendNext(animator.GetBool(hashRunning));
+                stream.SendNext(agent.velocity);
+                stream.SendNext(agent.destination);
+                stream.SendNext(agent.isStopped);
+                
+                // Send current animation values
+                stream.SendNext(networkHorizontal);
+                stream.SendNext(networkVertical);
+                stream.SendNext(networkIsRunning);
             }
             else
             {
+                stream.SendNext(Vector3.zero);
+                stream.SendNext(transform.position);
+                stream.SendNext(false);
                 stream.SendNext(0f);
                 stream.SendNext(0f);
                 stream.SendNext(false);
@@ -740,65 +807,38 @@ public class NPCController : MonoBehaviourPunCallbacks, IPunObservable
             
             stream.SendNext(isDead);
             stream.SendNext(isMoving);
-            
-            // Send agent data if available
-            if (agent != null && agent.isOnNavMesh)
-            {
-                stream.SendNext(agent.destination);
-                stream.SendNext(agent.velocity.magnitude);
-            }
-            else
-            {
-                stream.SendNext(transform.position);
-                stream.SendNext(0f);
-            }
         }
         else
         {
-            // Clients receive data
-            Vector3 networkPosition = (Vector3)stream.ReceiveNext();
-            Quaternion networkRotation = (Quaternion)stream.ReceiveNext();
+            // Receive transform data
+            lastNetworkPosition = transform.position;
+            lastNetworkRotation = transform.rotation;
+            networkPosition = (Vector3)stream.ReceiveNext();
+            networkRotation = (Quaternion)stream.ReceiveNext();
             
-            // Receive animation parameters
-            float networkHorizontal = (float)stream.ReceiveNext();
-            float networkVertical = (float)stream.ReceiveNext();
-            bool networkIsRunning = (bool)stream.ReceiveNext();
+            // Receive agent and animation data
+            networkVelocity = (Vector3)stream.ReceiveNext();
+            Vector3 destination = (Vector3)stream.ReceiveNext();
+            bool isStopped = (bool)stream.ReceiveNext();
             
-            // Other state data
-            isDead = (bool)stream.ReceiveNext();
-            isMoving = (bool)stream.ReceiveNext();
+            // Receive animation values
+            networkHorizontal = (float)stream.ReceiveNext();
+            networkVertical = (float)stream.ReceiveNext();
+            networkIsRunning = (bool)stream.ReceiveNext();
             
-            // Agent data
-            Vector3 networkDestination = (Vector3)stream.ReceiveNext();
-            float networkSpeed = (float)stream.ReceiveNext();
-            
-            // Update client-side animation
-            if (animator != null)
-            {
-                animator.SetFloat(hashHorizontal, networkHorizontal);
-                animator.SetFloat(hashVertical, networkVertical);
-                animator.SetBool(hashRunning, networkIsRunning);
-            }
-            
-            // Update position and rotation
-            transform.position = Vector3.Lerp(transform.position, networkPosition, Time.deltaTime * 10f);
-            transform.rotation = Quaternion.Lerp(transform.rotation, networkRotation, Time.deltaTime * 10f);
-            
-            // Update agent on client if available
+            // Update agent if available
             if (agent != null && agent.isOnNavMesh)
             {
-                // Update agent's position
-                agent.nextPosition = transform.position;
-                
-                // Update destination if it's different
-                if (Vector3.Distance(agent.destination, networkDestination) > 1f)
+                if (!isStopped && Vector3.Distance(agent.destination, destination) > 0.1f)
                 {
-                    agent.SetDestination(networkDestination);
+                    agent.destination = destination;
                 }
-                
-                // Match the agent's speed
-                agent.speed = networkSpeed;
+                agent.isStopped = isStopped;
             }
+            
+            isDead = (bool)stream.ReceiveNext();
+            isMoving = (bool)stream.ReceiveNext();
+            lastNetworkUpdateTime = Time.time;
         }
     }
 
