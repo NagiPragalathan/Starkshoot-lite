@@ -91,6 +91,14 @@ public class NetworkManager : MonoBehaviourPunCallbacks {
     // Add a new dictionary to track bot kills
     private Dictionary<string, int> botKills = new Dictionary<string, int>();
 
+    // Add these new fields after the existing private fields around line 90
+    private bool isMasterClientSwitching = false;
+    private Dictionary<string, PlayerStats> backupPlayerStats = new Dictionary<string, PlayerStats>();
+    private Dictionary<string, int> backupKillStreaks = new Dictionary<string, int>();
+    private float backupGameTime = 0f;
+    private bool backupGameActive = false;
+    private List<Vector3> backupNPCPositions = new List<Vector3>();
+
     // Add this class to track player statistics
     private class PlayerStats {
         public int Score { get; set; }
@@ -739,6 +747,12 @@ public class NetworkManager : MonoBehaviourPunCallbacks {
         Cursor.lockState = CursorLockMode.None;
         Cursor.visible = true;
 
+        // Save current game state before attempting reconnection
+        if (PhotonNetwork.IsMasterClient && isGameActive)
+        {
+            CreateGameStateBackup();
+        }
+
         // Only attempt to reconnect if we're not showing the leaderboard
         if (leaderboardPanel == null || !leaderboardPanel.activeSelf) {
             if (cause != DisconnectCause.DisconnectByClientLogic) {
@@ -956,6 +970,9 @@ public class NetworkManager : MonoBehaviourPunCallbacks {
             currentGameTime = gameTime;
         }
         
+        // Load existing player stats from room properties if available
+        LoadPlayerStatsFromRoom();
+        
         // Start the game timer if master client
         if (PhotonNetwork.IsMasterClient) {
             isGameActive = true;
@@ -963,6 +980,9 @@ public class NetworkManager : MonoBehaviourPunCallbacks {
             
             // Update NPC count based on new player count
             UpdateNPCCount();
+            
+            // Start periodic data synchronization
+            StartCoroutine(PeriodicDataSync());
         }
         
         Respawn(0.0f);
@@ -971,6 +991,37 @@ public class NetworkManager : MonoBehaviourPunCallbacks {
         // If master client, force reset NPCs
         if (PhotonNetwork.IsMasterClient) {
             ForceResetNPCs();
+        }
+    }
+
+    private void LoadPlayerStatsFromRoom()
+    {
+        if (PhotonNetwork.CurrentRoom.CustomProperties.ContainsKey(PLAYER_STATS_PROP_KEY))
+        {
+            ExitGames.Client.Photon.Hashtable statsData = 
+                (ExitGames.Client.Photon.Hashtable)PhotonNetwork.CurrentRoom.CustomProperties[PLAYER_STATS_PROP_KEY];
+            
+            foreach (DictionaryEntry entry in statsData)
+            {
+                string playerName = entry.Key.ToString();
+                ExitGames.Client.Photon.Hashtable playerData = (ExitGames.Client.Photon.Hashtable)entry.Value;
+                
+                if (!playerStats.ContainsKey(playerName))
+                {
+                    playerStats[playerName] = new PlayerStats();
+                }
+                
+                playerStats[playerName].Score = (int)playerData["Score"];
+                playerStats[playerName].Kills = (int)playerData["Kills"];
+                
+                // Update UI if this is the local player
+                if (playerName == PhotonNetwork.LocalPlayer.NickName)
+                {
+                    UpdateUIStats(playerStats[playerName].Score, playerStats[playerName].Kills);
+                }
+            }
+            
+            Debug.Log($"Loaded player stats from room properties for {statsData.Count} players");
         }
     }
 
@@ -1036,6 +1087,12 @@ public class NetworkManager : MonoBehaviourPunCallbacks {
     /// Callback function when other player disconnected.
     /// </summary>
     public override void OnPlayerLeftRoom(Player other) {
+        // Create backup before any master client changes
+        if (PhotonNetwork.IsMasterClient)
+        {
+            CreateGameStateBackup();
+        }
+        
         if (PhotonNetwork.IsMasterClient) {
             Debug.Log($"Player {other.NickName} left - Updating NPC count");
             
@@ -1081,30 +1138,99 @@ public class NetworkManager : MonoBehaviourPunCallbacks {
         playerStats[playerName].Score = score;
         playerStats[playerName].Kills = kills;
         
-        // Update room properties if we're in a room
+        // Update room properties if we're in a room (and ensure this persists even during master client switches)
         if (PhotonNetwork.InRoom) {
+            // Always try to update room properties, regardless of master client status
+            try {
+                ExitGames.Client.Photon.Hashtable statsData = new ExitGames.Client.Photon.Hashtable();
+                if (PhotonNetwork.CurrentRoom.CustomProperties.ContainsKey(PLAYER_STATS_PROP_KEY)) {
+                    statsData = (ExitGames.Client.Photon.Hashtable)PhotonNetwork.CurrentRoom.CustomProperties[PLAYER_STATS_PROP_KEY];
+                }
+                
+                // Create or update player stats in the room properties
+                ExitGames.Client.Photon.Hashtable playerData = new ExitGames.Client.Photon.Hashtable() {
+                    {"Score", score},
+                    {"Kills", kills}
+                };
+                statsData[playerName] = playerData;
+                
+                // Update the room properties (only master client can do this, but we try anyway)
+                if (PhotonNetwork.IsMasterClient) {
+                    ExitGames.Client.Photon.Hashtable roomProps = new ExitGames.Client.Photon.Hashtable() {
+                        {PLAYER_STATS_PROP_KEY, statsData}
+                    };
+                    PhotonNetwork.CurrentRoom.SetCustomProperties(roomProps);
+                } else {
+                    // If we're not master client, store locally and send to master client
+                    photonView.RPC("RequestStatsUpdate_RPC", RpcTarget.MasterClient, playerName, score, kills);
+                }
+            } catch (System.Exception e) {
+                Debug.LogError($"Error updating room properties in UpdatePlayerStats_RPC: {e.Message}");
+            }
+        }
+        
+        // Update UI for the local player
+        if (playerName == PhotonNetwork.LocalPlayer.NickName) {
+            UpdateUIStats(score, kills);
+        }
+    }
+
+    // Add new RPC to handle stats update requests from non-master clients
+    [PunRPC]
+    private void RequestStatsUpdate_RPC(string playerName, int score, int kills) {
+        if (!PhotonNetwork.IsMasterClient) return;
+        
+        Debug.Log($"Master client received stats update request for {playerName}: Score {score}, Kills {kills}");
+        
+        // Update local stats
+        if (!playerStats.ContainsKey(playerName)) {
+            playerStats[playerName] = new PlayerStats();
+        }
+        playerStats[playerName].Score = score;
+        playerStats[playerName].Kills = kills;
+        
+        // Update room properties
+        try {
             ExitGames.Client.Photon.Hashtable statsData = new ExitGames.Client.Photon.Hashtable();
             if (PhotonNetwork.CurrentRoom.CustomProperties.ContainsKey(PLAYER_STATS_PROP_KEY)) {
                 statsData = (ExitGames.Client.Photon.Hashtable)PhotonNetwork.CurrentRoom.CustomProperties[PLAYER_STATS_PROP_KEY];
             }
             
-            // Create or update player stats in the room properties
             ExitGames.Client.Photon.Hashtable playerData = new ExitGames.Client.Photon.Hashtable() {
                 {"Score", score},
                 {"Kills", kills}
             };
             statsData[playerName] = playerData;
             
-            // Update the room properties
             ExitGames.Client.Photon.Hashtable roomProps = new ExitGames.Client.Photon.Hashtable() {
                 {PLAYER_STATS_PROP_KEY, statsData}
             };
             PhotonNetwork.CurrentRoom.SetCustomProperties(roomProps);
+            
+            Debug.Log($"Master client updated room properties for {playerName}");
+        } catch (System.Exception e) {
+            Debug.LogError($"Error updating room properties for {playerName}: {e.Message}");
         }
-        
-        // Update UI for the local player
-        if (playerName == PhotonNetwork.LocalPlayer.NickName) {
-            UpdateUIStats(score, kills);
+    }
+
+    // Add a method to sync all data periodically
+    private IEnumerator PeriodicDataSync() {
+        while (PhotonNetwork.InRoom) {
+            yield return new WaitForSeconds(5f); // Sync every 5 seconds
+            
+            if (PhotonNetwork.IsMasterClient && !isMasterClientSwitching) {
+                // Sync all player stats to ensure consistency
+                foreach (var kvp in playerStats) {
+                    photonView.RPC("UpdatePlayerStats_RPC", RpcTarget.All, 
+                        kvp.Key, kvp.Value.Score, kvp.Value.Kills);
+                }
+                
+                // Sync game state
+                photonView.RPC("SyncTimer", RpcTarget.All, currentGameTime);
+                photonView.RPC("SyncGameState", RpcTarget.All, isGameActive);
+                
+                Debug.Log("Performed periodic data sync");
+            }
         }
     }
 
@@ -1166,6 +1292,12 @@ public class NetworkManager : MonoBehaviourPunCallbacks {
     }
 
     void Update() {
+        // Create regular backups of game state
+        if (PhotonNetwork.IsMasterClient && !isMasterClientSwitching)
+        {
+            CreateGameStateBackup();
+        }
+        
         if (isGameActive && PhotonNetwork.IsMasterClient) {
             if (currentGameTime > 0) {
                 currentGameTime -= Time.deltaTime;
@@ -1731,6 +1863,12 @@ public class NetworkManager : MonoBehaviourPunCallbacks {
 
     // Add these new callbacks to track player join/leave events
     public override void OnPlayerEnteredRoom(Player newPlayer) {
+        // Create backup before any changes
+        if (PhotonNetwork.IsMasterClient)
+        {
+            CreateGameStateBackup();
+        }
+        
         if (PhotonNetwork.IsMasterClient) {
             Debug.Log($"Player {newPlayer.NickName} joined - Updating NPC count");
             
@@ -1738,6 +1876,17 @@ public class NetworkManager : MonoBehaviourPunCallbacks {
             UpdateNPCCount();
             
             AddMessage("Player " + newPlayer.NickName + " Joined Game.");
+            
+            // Sync current game state to the new player
+            photonView.RPC("SyncTimer", RpcTarget.All, currentGameTime);
+            photonView.RPC("SyncGameState", RpcTarget.All, isGameActive);
+            
+            // Send current player stats to the new player
+            foreach (var kvp in playerStats)
+            {
+                photonView.RPC("UpdatePlayerStats_RPC", RpcTarget.All, 
+                    kvp.Key, kvp.Value.Score, kvp.Value.Kills);
+            }
         }
 
         if (PhotonNetwork.IsMasterClient) {
@@ -1857,17 +2006,27 @@ public class NetworkManager : MonoBehaviourPunCallbacks {
         
         try
         {
-            // Instantiate the NPC
+            // Instantiate the NPC with explicit ownership
             GameObject npc = PhotonNetwork.Instantiate(npcPrefab.name, spawnPosition, spawnRotation, 0);
             
             if (npc != null)
             {
                 PhotonView pv = npc.GetComponent<PhotonView>();
                 Debug.Log($"NPC spawned with PhotonView ID: {pv.ViewID} at position: {spawnPosition}");
+                
+                // Ensure the master client owns this NPC
+                if (pv.Owner != PhotonNetwork.LocalPlayer)
+                {
+                    pv.TransferOwnership(PhotonNetwork.LocalPlayer);
+                }
+                
                 SetupNPC(npc);
                 
-                // Don't add message here since the bot name isn't set yet
-                // The message will be added in the SetBotName RPC in NPCHealth
+                // Add to our tracking list
+                if (!activeNPCs.Contains(npc))
+                {
+                    activeNPCs.Add(npc);
+                }
                 
                 return npc;
             }
@@ -2659,6 +2818,197 @@ public class NetworkManager : MonoBehaviourPunCallbacks {
         if (timeSelectionDropdown != null)
         {
             timeSelectionDropdown.interactable = !isTimerFromAPI && isWalletConnected && canEdit;
+        }
+    }
+
+    public override void OnMasterClientSwitched(Player newMasterClient)
+    {
+        Debug.Log($"Master client switched from previous to {newMasterClient.NickName}");
+        
+        if (PhotonNetwork.IsMasterClient)
+        {
+            Debug.Log("I am now the new master client - taking over responsibilities");
+            isMasterClientSwitching = true;
+            
+            // Restore game state from backup
+            StartCoroutine(RestoreMasterClientState());
+        }
+        else
+        {
+            Debug.Log($"New master client is {newMasterClient.NickName}");
+        }
+    }
+
+    private IEnumerator RestoreMasterClientState()
+    {
+        yield return new WaitForSeconds(1f); // Wait for network stabilization
+        
+        Debug.Log("Restoring master client state...");
+        
+        // Restore game timer and state
+        if (backupGameActive && backupGameTime > 0)
+        {
+            currentGameTime = backupGameTime;
+            isGameActive = backupGameActive;
+            photonView.RPC("SyncTimer", RpcTarget.All, currentGameTime);
+            photonView.RPC("SyncGameState", RpcTarget.All, isGameActive);
+            Debug.Log($"Restored game timer: {currentGameTime}, active: {isGameActive}");
+        }
+        
+        // Restore player statistics
+        foreach (var kvp in backupPlayerStats)
+        {
+            playerStats[kvp.Key] = kvp.Value;
+            photonView.RPC("UpdatePlayerStats_RPC", RpcTarget.All, 
+                kvp.Key, kvp.Value.Score, kvp.Value.Kills);
+        }
+        
+        // Restore kill streaks
+        foreach (var kvp in backupKillStreaks)
+        {
+            killStreaks[kvp.Key] = kvp.Value;
+        }
+        
+        // Update room properties to reflect current state
+        UpdateRoomPropertiesAsNewMaster();
+        
+        // Handle NPC management
+        yield return StartCoroutine(RestoreNPCState());
+        
+        isMasterClientSwitching = false;
+        Debug.Log("Master client state restoration completed");
+    }
+
+    private void UpdateRoomPropertiesAsNewMaster()
+    {
+        if (!PhotonNetwork.IsMasterClient) return;
+        
+        try
+        {
+            ExitGames.Client.Photon.Hashtable roomProps = new ExitGames.Client.Photon.Hashtable();
+            
+            // Update basic room info
+            roomProps["RealPlayerCount"] = PhotonNetwork.CurrentRoom.PlayerCount;
+            roomProps["GameState"] = isGameActive ? "InProgress" : "Waiting";
+            roomProps["GameTime"] = currentGameTime;
+            
+            // Update player stats in room properties
+            ExitGames.Client.Photon.Hashtable statsData = new ExitGames.Client.Photon.Hashtable();
+            foreach (var kvp in playerStats)
+            {
+                ExitGames.Client.Photon.Hashtable playerData = new ExitGames.Client.Photon.Hashtable()
+                {
+                    {"Score", kvp.Value.Score},
+                    {"Kills", kvp.Value.Kills}
+                };
+                statsData[kvp.Key] = playerData;
+            }
+            roomProps[PLAYER_STATS_PROP_KEY] = statsData;
+            
+            PhotonNetwork.CurrentRoom.SetCustomProperties(roomProps);
+            Debug.Log("Updated room properties as new master client");
+        }
+        catch (System.Exception e)
+        {
+            Debug.LogError($"Error updating room properties as new master: {e.Message}");
+        }
+    }
+
+    private IEnumerator RestoreNPCState()
+    {
+        // Clean up any orphaned NPCs first
+        GameObject[] existingNPCs = GameObject.FindGameObjectsWithTag("NPC");
+        List<GameObject> validNPCs = new List<GameObject>();
+        
+        foreach (GameObject npc in existingNPCs)
+        {
+            PhotonView npcPV = npc.GetComponent<PhotonView>();
+            if (npcPV != null && npcPV.Owner == null)
+            {
+                // This NPC's owner disconnected, take ownership
+                npcPV.TransferOwnership(PhotonNetwork.LocalPlayer);
+                validNPCs.Add(npc);
+                Debug.Log($"Took ownership of orphaned NPC: {npc.name}");
+            }
+            else if (npcPV != null)
+            {
+                validNPCs.Add(npc);
+            }
+            else
+            {
+                // NPC without PhotonView, destroy it
+                Destroy(npc);
+            }
+        }
+        
+        yield return new WaitForSeconds(0.5f);
+        
+        // Ensure we have the correct number of NPCs
+        int requiredNPCs = CalculateRequiredNPCs();
+        int currentValidNPCs = validNPCs.Count;
+        
+        if (currentValidNPCs < requiredNPCs)
+        {
+            int npcsToSpawn = requiredNPCs - currentValidNPCs;
+            Debug.Log($"Spawning {npcsToSpawn} NPCs to maintain correct count");
+            
+            for (int i = 0; i < npcsToSpawn; i++)
+            {
+                SpawnNPC();
+                yield return new WaitForSeconds(0.5f);
+            }
+        }
+        else if (currentValidNPCs > requiredNPCs)
+        {
+            int npcsToRemove = currentValidNPCs - requiredNPCs;
+            Debug.Log($"Removing {npcsToRemove} excess NPCs");
+            
+            for (int i = 0; i < npcsToRemove && i < validNPCs.Count; i++)
+            {
+                if (validNPCs[i] != null)
+                {
+                    PhotonNetwork.Destroy(validNPCs[i]);
+                }
+            }
+        }
+        
+        // Update NPC count in room properties
+        UpdateNPCCount();
+    }
+
+    private void CreateGameStateBackup()
+    {
+        // Backup player stats
+        backupPlayerStats.Clear();
+        foreach (var kvp in playerStats)
+        {
+            backupPlayerStats[kvp.Key] = new PlayerStats
+            {
+                Score = kvp.Value.Score,
+                Kills = kvp.Value.Kills
+            };
+        }
+        
+        // Backup kill streaks
+        backupKillStreaks.Clear();
+        foreach (var kvp in killStreaks)
+        {
+            backupKillStreaks[kvp.Key] = kvp.Value;
+        }
+        
+        // Backup game state
+        backupGameTime = currentGameTime;
+        backupGameActive = isGameActive;
+        
+        // Backup NPC positions
+        backupNPCPositions.Clear();
+        GameObject[] npcs = GameObject.FindGameObjectsWithTag("NPC");
+        foreach (GameObject npc in npcs)
+        {
+            if (npc != null)
+            {
+                backupNPCPositions.Add(npc.transform.position);
+            }
         }
     }
 }

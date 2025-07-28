@@ -47,6 +47,8 @@ public class NPCHealth : MonoBehaviourPunCallbacks, IPunObservable
     private NetworkManager networkManager;
     private PhotonView photonView;
     private NPCController npcController;
+    private NavMeshAgent agent; // Add NavMeshAgent field
+    private NPCTpsGun npcGun; // Add NPCTpsGun field
 
     // Add these new variables for position/rotation sync
     private Vector3 networkPosition;
@@ -118,6 +120,8 @@ public class NPCHealth : MonoBehaviourPunCallbacks, IPunObservable
         animator = GetComponent<Animator>();
         networkManager = FindObjectOfType<NetworkManager>();
         npcController = GetComponent<NPCController>();
+        agent = GetComponent<NavMeshAgent>(); // Initialize NavMeshAgent
+        npcGun = GetComponentInChildren<NPCTpsGun>(); // Initialize NPCTpsGun
         
         currentHealth = startingHealth;
         isDead = false;
@@ -237,14 +241,16 @@ public class NPCHealth : MonoBehaviourPunCallbacks, IPunObservable
             npcController.enabled = false;
         }
         
-        var agent = GetComponent<NavMeshAgent>();
-        if (agent != null) agent.enabled = false;
+        if (agent != null) 
+        {
+            agent.isStopped = true;
+            agent.enabled = false;
+        }
 
         // Disable any NPCTpsGun components
-        var guns = GetComponentsInChildren<NPCTpsGun>();
-        foreach (var gun in guns)
+        if (npcGun != null)
         {
-            gun.enabled = false;
+            npcGun.enabled = false;
         }
 
         // Play death animation
@@ -457,7 +463,6 @@ public class NPCHealth : MonoBehaviourPunCallbacks, IPunObservable
         }
         
         // Re-enable NavMeshAgent
-        NavMeshAgent agent = GetComponent<NavMeshAgent>();
         if (agent != null)
         {
             agent.enabled = true;
@@ -480,8 +485,10 @@ public class NPCHealth : MonoBehaviourPunCallbacks, IPunObservable
         isSinking = false;
 
         // Enable all necessary components
-        var agent = GetComponent<NavMeshAgent>();
-        if (agent != null) agent.enabled = true;
+        if (agent != null) 
+        {
+            agent.enabled = true;
+        }
 
         var controller = GetComponent<NPCController>();
         if (controller != null) controller.enabled = true;
