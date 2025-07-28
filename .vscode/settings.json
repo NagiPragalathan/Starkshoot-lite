@@ -48,5 +48,5 @@
         "temp/": true,
         "Temp/": true
     },
-    "dotnet.defaultSolution": "Starkshoot-Ghibli.sln"
+    "dotnet.defaultSolution": "Starkshoot-lite.sln"
 }
