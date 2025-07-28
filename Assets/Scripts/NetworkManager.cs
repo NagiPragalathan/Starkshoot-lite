@@ -970,8 +970,8 @@ public class NetworkManager : MonoBehaviourPunCallbacks {
             currentGameTime = gameTime;
         }
         
-        // Load existing player stats from room properties if available
-        LoadPlayerStatsFromRoom();
+        // Load and sync player stats
+        LoadAndSyncPlayerStats();
         
         // Start the game timer if master client
         if (PhotonNetwork.IsMasterClient) {
@@ -994,34 +994,42 @@ public class NetworkManager : MonoBehaviourPunCallbacks {
         }
     }
 
-    private void LoadPlayerStatsFromRoom()
+    private void LoadAndSyncPlayerStats()
     {
-        if (PhotonNetwork.CurrentRoom.CustomProperties.ContainsKey(PLAYER_STATS_PROP_KEY))
+        string playerName = PhotonNetwork.LocalPlayer.NickName;
+        
+        // First try to load from room properties
+        if (PhotonNetwork.CurrentRoom != null && 
+            PhotonNetwork.CurrentRoom.CustomProperties.ContainsKey(PLAYER_STATS_PROP_KEY))
         {
-            ExitGames.Client.Photon.Hashtable statsData = 
-                (ExitGames.Client.Photon.Hashtable)PhotonNetwork.CurrentRoom.CustomProperties[PLAYER_STATS_PROP_KEY];
-            
-            foreach (DictionaryEntry entry in statsData)
+            var statsData = (ExitGames.Client.Photon.Hashtable)PhotonNetwork.CurrentRoom.CustomProperties[PLAYER_STATS_PROP_KEY];
+            if (statsData.ContainsKey(playerName))
             {
-                string playerName = entry.Key.ToString();
-                ExitGames.Client.Photon.Hashtable playerData = (ExitGames.Client.Photon.Hashtable)entry.Value;
+                var playerData = (ExitGames.Client.Photon.Hashtable)statsData[playerName];
+                int score = (int)playerData["Score"];
+                int kills = (int)playerData["Kills"];
                 
+                // Update local stats
                 if (!playerStats.ContainsKey(playerName))
                 {
                     playerStats[playerName] = new PlayerStats();
                 }
+                playerStats[playerName].Score = score;
+                playerStats[playerName].Kills = kills;
                 
-                playerStats[playerName].Score = (int)playerData["Score"];
-                playerStats[playerName].Kills = (int)playerData["Kills"];
+                // Update UI
+                UpdateUIStats(score, kills);
                 
-                // Update UI if this is the local player
-                if (playerName == PhotonNetwork.LocalPlayer.NickName)
-                {
-                    UpdateUIStats(playerStats[playerName].Score, playerStats[playerName].Kills);
-                }
+                Debug.Log($"Loaded stats for {playerName} from room properties: Score={score}, Kills={kills}");
             }
-            
-            Debug.Log($"Loaded player stats from room properties for {statsData.Count} players");
+        }
+        
+        // If no stats found, initialize with zeros
+        if (!playerStats.ContainsKey(playerName))
+        {
+            playerStats[playerName] = new PlayerStats();
+            UpdateUIStats(0, 0);
+            Debug.Log($"Initialized new stats for {playerName}");
         }
     }
 
@@ -1110,20 +1118,60 @@ public class NetworkManager : MonoBehaviourPunCallbacks {
     }
 
     // Add this method to handle UI updates
-    private void UpdateUIStats(int score, int kills) {
-        // Ensure UI updates happen on the main thread
-        if (scoreText != null) {
-            scoreText.text = $":{score}";
-            Debug.Log($"Updated score text to: {score}");
-        } else {
-            Debug.LogWarning("scoreText is null!");
+    private void UpdateUIStats(int score, int kills)
+    {
+        // Ensure we're on the main thread
+        if (!UnityEngine.Application.isPlaying) return;
+
+        try
+        {
+            // Update score text
+            if (scoreText != null)
+            {
+                scoreText.text = $":{score}";
+                Debug.Log($"Updated score text to: {score}");
+            }
+            else
+            {
+                Debug.LogWarning("scoreText is null! Attempting to find reference...");
+                scoreText = GameObject.Find("ScoreText")?.GetComponent<Text>();
+                if (scoreText != null)
+                {
+                    scoreText.text = $":{score}";
+                }
+            }
+
+            // Update kills text
+            if (killsText != null)
+            {
+                killsText.text = $":{kills}";
+                Debug.Log($"Updated kills text to: {kills}");
+            }
+            else
+            {
+                Debug.LogWarning("killsText is null! Attempting to find reference...");
+                killsText = GameObject.Find("KillsText")?.GetComponent<Text>();
+                if (killsText != null)
+                {
+                    killsText.text = $":{kills}";
+                }
+            }
+
+            // Double check that local player stats are up to date
+            string playerName = PhotonNetwork.LocalPlayer.NickName;
+            if (playerStats.ContainsKey(playerName))
+            {
+                if (playerStats[playerName].Score != score || playerStats[playerName].Kills != kills)
+                {
+                    Debug.LogWarning($"Local stats mismatch! Updating... Score: {score}, Kills: {kills}");
+                    playerStats[playerName].Score = score;
+                    playerStats[playerName].Kills = kills;
+                }
+            }
         }
-        
-        if (killsText != null) {
-            killsText.text = $":{kills}";
-            Debug.Log($"Updated kills text to: {kills}");
-        } else {
-            Debug.LogWarning("killsText is null!");
+        catch (System.Exception e)
+        {
+            Debug.LogError($"Error updating UI stats: {e.Message}\n{e.StackTrace}");
         }
     }
 
@@ -2300,9 +2348,6 @@ public class NetworkManager : MonoBehaviourPunCallbacks {
     [PunRPC]
     private void AddBotKill_RPC(string killerName, string botName)
     {
-        // Add logging to track when this is called
-        Debug.Log($"AddBotKill_RPC called - Killer: {killerName}, Bot: {botName}, IsMasterClient: {PhotonNetwork.IsMasterClient}");
-
         // Ensure this bot hasn't already been counted
         string killKey = $"{botName}_{killerName}";
         if (!processedKills.Contains(killKey))
@@ -2315,6 +2360,10 @@ public class NetworkManager : MonoBehaviourPunCallbacks {
             }
             
             // Update kill streak and calculate score
+            if (!killStreaks.ContainsKey(killerName))
+            {
+                killStreaks[killerName] = 0;
+            }
             killStreaks[killerName]++;
             int scoreToAdd = CalculateBotKillScore(killStreaks[killerName]);
             
@@ -2331,7 +2380,7 @@ public class NetworkManager : MonoBehaviourPunCallbacks {
             botKills[killerName]++;
             
             // Add kill message to chat
-            AddMessage($"{killerName} eliminated {botName}!");
+            AddMessage($"{killerName} eliminated {botName} (+{scoreToAdd} points)!");
             
             // Add kill streak notification to chat
             string notification = GetKillStreakNotification(killStreaks[killerName]);
@@ -2344,6 +2393,35 @@ public class NetworkManager : MonoBehaviourPunCallbacks {
             if (killerName == PhotonNetwork.LocalPlayer.NickName)
             {
                 UpdateUIStats(currentScore, playerStats[killerName].Kills);
+            }
+
+            // Ensure stats are synced across all clients
+            photonView.RPC("UpdatePlayerStats_RPC", RpcTarget.All, 
+                killerName, 
+                currentScore,
+                playerStats[killerName].Kills);
+
+            // Update room properties to persist the stats
+            if (PhotonNetwork.InRoom)
+            {
+                ExitGames.Client.Photon.Hashtable statsData = new ExitGames.Client.Photon.Hashtable();
+                if (PhotonNetwork.CurrentRoom.CustomProperties.ContainsKey(PLAYER_STATS_PROP_KEY))
+                {
+                    statsData = (ExitGames.Client.Photon.Hashtable)PhotonNetwork.CurrentRoom.CustomProperties[PLAYER_STATS_PROP_KEY];
+                }
+
+                ExitGames.Client.Photon.Hashtable playerData = new ExitGames.Client.Photon.Hashtable()
+                {
+                    {"Score", currentScore},
+                    {"Kills", playerStats[killerName].Kills}
+                };
+                statsData[killerName] = playerData;
+
+                ExitGames.Client.Photon.Hashtable roomProps = new ExitGames.Client.Photon.Hashtable()
+                {
+                    {PLAYER_STATS_PROP_KEY, statsData}
+                };
+                PhotonNetwork.CurrentRoom.SetCustomProperties(roomProps);
             }
         }
         else

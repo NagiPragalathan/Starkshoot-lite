@@ -447,31 +447,56 @@ public class NPCController : MonoBehaviourPunCallbacks, IPunObservable
         {
             // Calculate interpolation factor
             float timeSinceLastUpdate = Time.time - lastNetworkUpdateTime;
-            float interpolationFactor = timeSinceLastUpdate / NETWORK_SYNC_INTERVAL;
+            float interpolationFactor = Mathf.Clamp01(timeSinceLastUpdate / NETWORK_SYNC_INTERVAL);
             
-            // Smoothly interpolate position
-            transform.position = Vector3.Lerp(transform.position, networkPosition, Time.deltaTime * networkLerpSpeed);
+            // Smoothly interpolate position with increased speed and better error correction
+            Vector3 targetPosition = networkPosition;
+            if (Vector3.Distance(transform.position, targetPosition) > 5f)
+            {
+                // If too far, teleport
+                transform.position = targetPosition;
+                if (agent != null && agent.isOnNavMesh)
+                {
+                    agent.Warp(targetPosition);
+                }
+            }
+            else
+            {
+                // Normal interpolation with velocity prediction
+                Vector3 predictedPosition = networkPosition + (networkVelocity * timeSinceLastUpdate);
+                transform.position = Vector3.Lerp(transform.position, predictedPosition, Time.deltaTime * networkLerpSpeed);
+            }
             
-            // Smoothly interpolate rotation
+            // Smoothly interpolate rotation with increased speed
             transform.rotation = Quaternion.Lerp(transform.rotation, networkRotation, Time.deltaTime * networkLerpSpeed);
             
             // Update animator parameters smoothly
-            animator.SetFloat("Horizontal", Mathf.Lerp(animator.GetFloat("Horizontal"), networkHorizontal, Time.deltaTime / animationSmoothTime));
-            animator.SetFloat("Vertical", Mathf.Lerp(animator.GetFloat("Vertical"), networkVertical, Time.deltaTime / animationSmoothTime));
-            animator.SetBool("Running", networkIsRunning);
-            
-            // Update agent velocity for smoother movement
-            if (agent.enabled)
+            if (animator != null)
             {
-                agent.velocity = networkVelocity;
+                animator.SetFloat(hashHorizontal, Mathf.Lerp(animator.GetFloat(hashHorizontal), networkHorizontal, Time.deltaTime / animationSmoothTime));
+                animator.SetFloat(hashVertical, Mathf.Lerp(animator.GetFloat(hashVertical), networkVertical, Time.deltaTime / animationSmoothTime));
+                animator.SetBool(hashRunning, networkIsRunning);
             }
             
-            // If we're too far from the network position, teleport
-            float distanceToNetwork = Vector3.Distance(transform.position, networkPosition);
-            if (distanceToNetwork > 5f)
+            // Update agent if available
+            if (agent != null && agent.isOnNavMesh)
             {
-                transform.position = networkPosition;
-                transform.rotation = networkRotation;
+                // Update agent's position
+                agent.nextPosition = transform.position;
+                
+                // Update destination if significantly different
+                float distanceToDestination = Vector3.Distance(agent.destination, networkPosition);
+                if (distanceToDestination > 0.5f)
+                {
+                    NavMeshPath path = new NavMeshPath();
+                    if (NavMesh.CalculatePath(transform.position, networkPosition, NavMesh.AllAreas, path))
+                    {
+                        agent.destination = networkPosition;
+                    }
+                }
+                
+                // Update velocity
+                agent.velocity = networkVelocity;
             }
         }
     }
@@ -793,27 +818,39 @@ public class NPCController : MonoBehaviourPunCallbacks, IPunObservable
     {
         if (stream.IsWriting)
         {
-            // Send position, rotation, and movement data
+            // Calculate network lag
+            float lag = Mathf.Abs((float)(PhotonNetwork.Time - info.SentServerTime));
+            
+            // Send position and movement data
             stream.SendNext(transform.position);
             stream.SendNext(transform.rotation);
-            stream.SendNext(agent.velocity);
-            stream.SendNext(agent.destination);
+            stream.SendNext(agent != null ? agent.velocity : Vector3.zero);
+            stream.SendNext(agent != null ? agent.destination : transform.position);
             stream.SendNext(isDead);
             
-            // Send animation parameters
-            stream.SendNext(animator.GetFloat("Horizontal"));
-            stream.SendNext(animator.GetFloat("Vertical"));
-            stream.SendNext(animator.GetBool("Running"));
+            // Send animation data
+            stream.SendNext(animator != null ? animator.GetFloat(hashHorizontal) : 0f);
+            stream.SendNext(animator != null ? animator.GetFloat(hashVertical) : 0f);
+            stream.SendNext(networkIsRunning);
         }
         else
         {
-            // Receive position and rotation
+            // Store last values for interpolation
+            lastNetworkPosition = networkPosition;
+            lastNetworkRotation = networkRotation;
+            
+            // Receive position and movement data
             networkPosition = (Vector3)stream.ReceiveNext();
             networkRotation = (Quaternion)stream.ReceiveNext();
             networkVelocity = (Vector3)stream.ReceiveNext();
             Vector3 newDestination = (Vector3)stream.ReceiveNext();
             bool newIsDead = (bool)stream.ReceiveNext();
-
+            
+            // Receive animation data
+            networkHorizontal = (float)stream.ReceiveNext();
+            networkVertical = (float)stream.ReceiveNext();
+            networkIsRunning = (bool)stream.ReceiveNext();
+            
             // Calculate network lag
             float lag = Mathf.Abs((float)(PhotonNetwork.Time - info.SentServerTime));
             
@@ -821,7 +858,7 @@ public class NPCController : MonoBehaviourPunCallbacks, IPunObservable
             networkPosition += networkVelocity * lag;
             
             // Update agent destination if changed significantly
-            if (Vector3.Distance(agent.destination, newDestination) > 0.1f)
+            if (agent != null && Vector3.Distance(agent.destination, newDestination) > 0.1f)
             {
                 agent.destination = newDestination;
             }
@@ -835,11 +872,6 @@ public class NPCController : MonoBehaviourPunCallbacks, IPunObservable
                     PlayDeathAnimation();
                 }
             }
-
-            // Receive animation parameters
-            networkHorizontal = (float)stream.ReceiveNext();
-            networkVertical = (float)stream.ReceiveNext();
-            networkIsRunning = (bool)stream.ReceiveNext();
             
             // Record the time when we received new network data
             lastNetworkUpdateTime = Time.time;
