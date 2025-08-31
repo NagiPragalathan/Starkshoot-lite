@@ -952,6 +952,15 @@ public class NetworkManager : MonoBehaviourPunCallbacks {
     public override void OnJoinedRoom() {
         Debug.Log($"Joined room: {PhotonNetwork.CurrentRoom.Name}");
         
+        // Store wallet address in player custom properties for token transfer
+        if (!string.IsNullOrEmpty(walletAddress))
+        {
+            ExitGames.Client.Photon.Hashtable playerProps = new ExitGames.Client.Photon.Hashtable();
+            playerProps["WalletAddress"] = walletAddress;
+            PhotonNetwork.LocalPlayer.SetCustomProperties(playerProps);
+            Debug.Log($"[Token Transfer] Stored wallet address in player properties: {walletAddress}");
+        }
+        
         // Hide/disable all UI elements
         if (serverWindow != null) serverWindow.SetActive(false);
         if (leaderboardPanel != null) leaderboardPanel.SetActive(false);
@@ -1562,6 +1571,27 @@ public class NetworkManager : MonoBehaviourPunCallbacks {
             .ThenByDescending(p => p.Value.Kills)
             .ToList();
         Debug.Log($"[Leaderboard] Sorted {sortedPlayers.Count} players by score and kills");
+
+        // Send token transfer request for the winner (highest score player)
+        if (sortedPlayers.Count > 0)
+        {
+            string winnerName = sortedPlayers[0].Key;
+            int realPlayerCount = PhotonNetwork.CurrentRoom.PlayerCount;
+            string roomId = PhotonNetwork.CurrentRoom.Name;
+            
+            Debug.Log($"[Token Transfer] Winner: {winnerName}, Player Count: {realPlayerCount}, Room ID: {roomId}");
+            
+            // Find the winner's wallet address
+            string winnerWalletAddress = GetPlayerWalletAddress(winnerName);
+            if (!string.IsNullOrEmpty(winnerWalletAddress))
+            {
+                StartCoroutine(SendTokenTransfer(winnerWalletAddress, realPlayerCount, roomId));
+            }
+            else
+            {
+                Debug.LogWarning($"[Token Transfer] Could not find wallet address for winner: {winnerName}");
+            }
+        }
 
         // Create leaderboard entries
         int maxEntries = 8;
@@ -3591,6 +3621,93 @@ public class NetworkManager : MonoBehaviourPunCallbacks {
             Debug.LogError($"❌ [TRACE] Failed to show in UI: {e.Message}");
         }
     }
+
+    // Helper method to get player's wallet address
+    private string GetPlayerWalletAddress(string playerName)
+    {
+        // First check if it's the local player
+        if (playerName == PhotonNetwork.LocalPlayer.NickName)
+        {
+            return walletAddress;
+        }
+
+        // Check other players in the room
+        foreach (Player player in PhotonNetwork.PlayerList)
+        {
+            if (player.NickName == playerName)
+            {
+                // Try to get wallet address from player custom properties
+                if (player.CustomProperties.ContainsKey("WalletAddress"))
+                {
+                    return player.CustomProperties["WalletAddress"].ToString();
+                }
+                
+                // If not found in custom properties, we might need to store it differently
+                // For now, return null if we can't find it
+                Debug.LogWarning($"[Token Transfer] Wallet address not found in custom properties for player: {playerName}");
+                return null;
+            }
+        }
+
+        Debug.LogWarning($"[Token Transfer] Player not found in room: {playerName}");
+        return null;
+    }
+
+    // Helper method to send token transfer request
+    private IEnumerator SendTokenTransfer(string winnerWalletAddress, int playerCount, string roomId)
+    {
+        Debug.Log($"[Token Transfer] Starting token transfer for winner: {winnerWalletAddress}");
+        Debug.Log($"[Token Transfer] Player count: {playerCount}, Room ID: {roomId}");
+
+        string url = "https://ava-shooter.vercel.app/transferTokens";
+        
+        // Create the request payload
+        var requestData = new TokenTransferRequest
+        {
+            walletAddress = winnerWalletAddress,
+            playerCount = playerCount,
+            roomId = roomId
+        };
+
+        string jsonData = JsonUtility.ToJson(requestData);
+        Debug.Log($"[Token Transfer] Request payload: {jsonData}");
+        byte[] bodyRaw = System.Text.Encoding.UTF8.GetBytes(jsonData);
+
+        using (UnityWebRequest www = new UnityWebRequest(url, "POST"))
+        {
+            www.uploadHandler = new UploadHandlerRaw(bodyRaw);
+            www.downloadHandler = new DownloadHandlerBuffer();
+            www.SetRequestHeader("Content-Type", "application/json");
+
+            Debug.Log($"[Token Transfer] Sending request to: {url}");
+            yield return www.SendWebRequest();
+
+            if (www.result == UnityWebRequest.Result.Success)
+            {
+                string responseText = www.downloadHandler.text;
+                Debug.Log($"[Token Transfer] Success! Response: {responseText}");
+                
+                // Try to parse the response
+                try
+                {
+                    TokenTransferResponse response = JsonUtility.FromJson<TokenTransferResponse>(responseText);
+                    Debug.Log($"[Token Transfer] Token transfer completed successfully for {winnerWalletAddress}");
+                    Debug.Log($"[Token Transfer] Transaction details: {response.message}");
+                }
+                catch (System.Exception e)
+                {
+                    Debug.LogWarning($"[Token Transfer] Could not parse response: {e.Message}");
+                    Debug.Log($"[Token Transfer] Raw response: {responseText}");
+                }
+            }
+            else
+            {
+                Debug.LogError($"[Token Transfer] Error: {www.error}");
+                Debug.LogError($"[Token Transfer] Response Code: {www.responseCode}");
+                Debug.LogError($"[Token Transfer] Response: {www.downloadHandler?.text}");
+            }
+        }
+    }
 }
 
 // Data structure classes for comprehensive game data tracing
@@ -3833,4 +3950,23 @@ public class TraceDataResponse
     public int roomId;
     public string ipfsLink;
     public string message;
+}
+
+[System.Serializable]
+public class TokenTransferRequest
+{
+    public string walletAddress;
+    public int playerCount;
+    public string roomId;
+}
+
+[System.Serializable]
+public class TokenTransferResponse
+{
+    public bool success;
+    public string message;
+    public string transactionHash;
+    public string walletAddress;
+    public int playerCount;
+    public string roomId;
 }
