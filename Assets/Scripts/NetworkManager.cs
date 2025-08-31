@@ -418,7 +418,7 @@ public class NetworkManager : MonoBehaviourPunCallbacks {
     private IEnumerator FetchUserData(string walletAddress)
     {
         Debug.Log($"[API] Starting to fetch user data for wallet: {walletAddress}");
-        string url = $"https://starkshoot-server.vercel.app/api/user/{walletAddress}";
+        string url = $"https://ava-shooter.vercel.app/api/user/{walletAddress}";
         
         using (UnityWebRequest www = UnityWebRequest.Get(url))
         {
@@ -1621,7 +1621,7 @@ public class NetworkManager : MonoBehaviourPunCallbacks {
         // Only send data for the local player
         if (username != PhotonNetwork.LocalPlayer.NickName) yield break;
 
-        string url = "https://starkshoot-server.vercel.app/api/leaderboard/add";
+        string url = "https://ava-shooter.vercel.app/api/leaderboard/add";
 
         LeaderboardEntryRequest requestData = new LeaderboardEntryRequest
         {
@@ -2877,7 +2877,7 @@ public class NetworkManager : MonoBehaviourPunCallbacks {
     {
         Debug.Log($"[Staking Update] Starting staking status update for wallet: {walletAddress}, setting isStaked to: {isStaked}");
 
-        string url = "https://starkshoot-server.vercel.app/api/stake";
+        string url = "https://ava-shooter.vercel.app/api/stake";
         Debug.Log($"[Staking Update] API URL: {url}");
 
         // Create and populate the request object
