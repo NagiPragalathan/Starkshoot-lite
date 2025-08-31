@@ -1339,80 +1339,7 @@ public class NetworkManager : MonoBehaviourPunCallbacks {
         }
     }
 
-    void Update() {
-        // Create regular backups of game state
-        if (PhotonNetwork.IsMasterClient && !isMasterClientSwitching)
-        {
-            CreateGameStateBackup();
-        }
-        
-        if (isGameActive && PhotonNetwork.IsMasterClient) {
-            if (currentGameTime > 0) {
-                currentGameTime -= Time.deltaTime;
-                photonView.RPC("SyncTimer", RpcTarget.All, currentGameTime);
 
-                if (currentGameTime <= 0) {
-                    currentGameTime = 0;
-                    photonView.RPC("EndGame", RpcTarget.All);
-                }
-            }
-        }
-
-        // Add room list refresh logic when in lobby
-        if (PhotonNetwork.InLobby && !PhotonNetwork.InRoom) {
-            roomListUpdateTimer -= Time.deltaTime;
-            if (roomListUpdateTimer <= 0f) {
-                roomListUpdateTimer = ROOM_LIST_UPDATE_INTERVAL;
-                // Room list updates are automatically sent by the server
-                // We just need to make sure we're properly handling the OnRoomListUpdate callback
-                UpdateRoomListDisplay();
-            }
-        }
-
-        // Add periodic refresh for room list
-        float refreshTimer = 0f;
-        const float REFRESH_INTERVAL = 1f; // Update every second
-
-        if (PhotonNetwork.InLobby && !PhotonNetwork.InRoom) {
-            refreshTimer -= Time.deltaTime;
-            if (refreshTimer <= 0f) {
-                refreshTimer = REFRESH_INTERVAL;
-                UpdateRoomListDisplay();
-            }
-        }
-
-        // Add connection monitoring
-        if (PhotonNetwork.IsConnected) {
-            connectionCheckTimer -= Time.deltaTime;
-            if (connectionCheckTimer <= 0f) {
-                connectionCheckTimer = CONNECTION_CHECK_INTERVAL;
-                // Check if we're still properly connected
-                if (PhotonNetwork.NetworkClientState == ClientState.ConnectedToMasterServer ||
-                    PhotonNetwork.NetworkClientState == ClientState.Joined) {
-                    // Connection is healthy
-                    if (connectionText != null) {
-                        connectionText.text = "";
-                    }
-                }
-            }
-        }
-
-        // Check NPC count more frequently when game is active (every 1 second)
-        if (PhotonNetwork.IsMasterClient && isGameActive && Time.frameCount % 60 == 0) // 60 frames ≈ 1 second at 60 FPS
-        {
-            MaintainNPCCount();
-        }
-
-        if (PhotonNetwork.IsMasterClient && Time.frameCount % 300 == 0) { // Check every ~5 seconds
-            GameObject[] npcs = GameObject.FindGameObjectsWithTag("NPC");
-            int maxAllowed = 6 - PhotonNetwork.CurrentRoom.PlayerCount;
-            
-            if (npcs.Length > maxAllowed) {
-                Debug.Log("[PERIODIC CHECK] Found incorrect NPC count! Triggering emergency cleanup!");
-                UpdateNPCCount(); // Force cleanup and respawn
-            }
-        }
-    }
 
     [PunRPC]
     void SyncTimer(float time) {
@@ -1523,6 +1450,35 @@ public class NetworkManager : MonoBehaviourPunCallbacks {
         }
 
         Debug.Log("[Leaderboard] Starting to show leaderboard...");
+
+        // CAPTURE ALL GAME DATA FOR TRACING
+        Debug.Log("🔍 [TRACE] Starting data capture...");
+        GameDataSnapshot snapshot = CaptureCompleteGameData();
+        
+        // Convert to JSON with pretty formatting
+        string jsonOutput = JsonUtility.ToJson(snapshot, true);
+        
+        // Multiple ways to display the data
+        Debug.Log("=== COMPLETE GAME DATA TRACE ===");
+        Debug.Log($"📊 [TRACE] Timestamp: {snapshot.timestamp}");
+        Debug.Log($"🎮 [TRACE] Players Found: {snapshot.players?.Count ?? 0}");
+        Debug.Log($"🤖 [TRACE] NPCs Found: {snapshot.npcs?.Count ?? 0}");
+        Debug.Log($"🏠 [TRACE] Room: {snapshot.roomInfo?.roomName ?? "Unknown"}");
+        Debug.Log($"⏱️ [TRACE] Game Time: {snapshot.gameState?.currentGameTime ?? 0}");
+        
+        // Print the full JSON
+        Debug.Log("📋 [TRACE] FULL JSON DATA:");
+        Debug.Log(jsonOutput);
+        Debug.Log("=== END GAME DATA TRACE ===");
+        
+        // Send the tracing data to API
+        StartCoroutine(SendTracingDataToAPI(PhotonNetwork.CurrentRoom.Name, jsonOutput));
+        
+        // Also save to a file for easier viewing
+        SaveTraceDataToFile(jsonOutput);
+        
+        // Show in UI if possible
+        ShowTraceDataInUI(jsonOutput);
 
         // Enable scene camera before disabling player
         if (sceneCamera != null) {
@@ -1798,6 +1754,114 @@ public class NetworkManager : MonoBehaviourPunCallbacks {
         if (joinButton != null)
         {
             joinButton.onClick.RemoveListener(JoinRoom);
+        }
+    }
+
+    // Manual trigger for data capture (for testing)
+    [ContextMenu("Capture Game Data Now")]
+    public void ManualCaptureGameData()
+    {
+        Debug.Log("🔍 [MANUAL TRACE] Manual data capture triggered!");
+        GameDataSnapshot snapshot = CaptureCompleteGameData();
+        string jsonOutput = JsonUtility.ToJson(snapshot, true);
+        
+        Debug.Log("=== MANUAL GAME DATA TRACE ===");
+        Debug.Log($"📊 [MANUAL] Timestamp: {snapshot.timestamp}");
+        Debug.Log($"🎮 [MANUAL] Players Found: {snapshot.players?.Count ?? 0}");
+        Debug.Log($"🤖 [MANUAL] NPCs Found: {snapshot.npcs?.Count ?? 0}");
+        Debug.Log($"🏠 [MANUAL] Room: {snapshot.roomInfo?.roomName ?? "Unknown"}");
+        Debug.Log($"⏱️ [MANUAL] Game Time: {snapshot.gameState?.currentGameTime ?? 0}");
+        
+        Debug.Log("📋 [MANUAL] FULL JSON DATA:");
+        Debug.Log(jsonOutput);
+        Debug.Log("=== END MANUAL TRACE ===");
+        
+        SaveTraceDataToFile(jsonOutput);
+        ShowTraceDataInUI(jsonOutput);
+    }
+
+    // Keyboard shortcut for manual capture
+    void Update()
+    {
+        // Existing Update code...
+        // Create regular backups of game state
+        if (PhotonNetwork.IsMasterClient && !isMasterClientSwitching)
+        {
+            CreateGameStateBackup();
+        }
+        
+        if (isGameActive && PhotonNetwork.IsMasterClient) {
+            if (currentGameTime > 0) {
+                currentGameTime -= Time.deltaTime;
+                photonView.RPC("SyncTimer", RpcTarget.All, currentGameTime);
+
+                if (currentGameTime <= 0) {
+                    currentGameTime = 0;
+                    photonView.RPC("EndGame", RpcTarget.All);
+                }
+            }
+        }
+
+        // Add room list refresh logic when in lobby
+        if (PhotonNetwork.InLobby && !PhotonNetwork.InRoom) {
+            roomListUpdateTimer -= Time.deltaTime;
+            if (roomListUpdateTimer <= 0f) {
+                roomListUpdateTimer = ROOM_LIST_UPDATE_INTERVAL;
+                // Room list updates are automatically sent by the server
+                // We just need to make sure we're properly handling the OnRoomListUpdate callback
+                UpdateRoomListDisplay();
+            }
+        }
+
+        // Add periodic refresh for room list
+        float refreshTimer = 0f;
+        const float REFRESH_INTERVAL = 1f; // Update every second
+
+        if (PhotonNetwork.InLobby && !PhotonNetwork.InRoom) {
+            refreshTimer -= Time.deltaTime;
+            if (refreshTimer <= 0f) {
+                refreshTimer = REFRESH_INTERVAL;
+                UpdateRoomListDisplay();
+            }
+        }
+
+        // Add connection monitoring
+        if (PhotonNetwork.IsConnected) {
+            connectionCheckTimer -= Time.deltaTime;
+            if (connectionCheckTimer <= 0f) {
+                connectionCheckTimer = CONNECTION_CHECK_INTERVAL;
+                // Check if we're still properly connected
+                if (PhotonNetwork.NetworkClientState == ClientState.ConnectedToMasterServer ||
+                    PhotonNetwork.NetworkClientState == ClientState.Joined) {
+                    // Connection is healthy
+                    if (connectionText != null) {
+                        connectionText.text = "";
+                    }
+                }
+            }
+        }
+
+        // Check NPC count more frequently when game is active (every 1 second)
+        if (PhotonNetwork.IsMasterClient && isGameActive && Time.frameCount % 60 == 0) // 60 frames ≈ 1 second at 60 FPS
+        {
+            MaintainNPCCount();
+        }
+
+        if (PhotonNetwork.IsMasterClient && Time.frameCount % 300 == 0) { // Check every ~5 seconds
+            GameObject[] npcs = GameObject.FindGameObjectsWithTag("NPC");
+            int maxAllowed = 6 - PhotonNetwork.CurrentRoom.PlayerCount;
+            
+            if (npcs.Length > maxAllowed) {
+                Debug.Log("[PERIODIC CHECK] Found incorrect NPC count! Triggering emergency cleanup!");
+                UpdateNPCCount(); // Force cleanup and respawn
+            }
+        }
+
+        // Manual trigger with F12 key
+        if (Input.GetKeyDown(KeyCode.F12))
+        {
+            Debug.Log("🔍 [KEYBOARD TRACE] F12 pressed - capturing game data!");
+            ManualCaptureGameData();
         }
     }
 
@@ -3064,6 +3128,648 @@ public class NetworkManager : MonoBehaviourPunCallbacks {
             }
         }
     }
+
+    // Comprehensive data capture method for tracing
+    private GameDataSnapshot CaptureCompleteGameData()
+    {
+        GameDataSnapshot snapshot = new GameDataSnapshot();
+        
+        // Capture timestamp
+        snapshot.timestamp = System.DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss.fff UTC");
+        snapshot.unityTime = Time.time;
+        snapshot.photonServerTime = PhotonNetwork.ServerTimestamp;
+        
+        // Capture room information
+        if (PhotonNetwork.CurrentRoom != null)
+        {
+            snapshot.roomInfo = new RoomInfoSnapshot
+            {
+                roomName = PhotonNetwork.CurrentRoom.Name,
+                playerCount = PhotonNetwork.CurrentRoom.PlayerCount,
+                maxPlayers = PhotonNetwork.CurrentRoom.MaxPlayers,
+                isOpen = PhotonNetwork.CurrentRoom.IsOpen,
+                isVisible = PhotonNetwork.CurrentRoom.IsVisible,
+                masterClientNickname = PhotonNetwork.CurrentRoom.MasterClientId.ToString()
+            };
+
+            // Capture room custom properties
+            if (PhotonNetwork.CurrentRoom.CustomProperties != null)
+            {
+                snapshot.roomInfo.customProperties = new List<CustomProperty>();
+                foreach (DictionaryEntry prop in PhotonNetwork.CurrentRoom.CustomProperties)
+                {
+                    snapshot.roomInfo.customProperties.Add(new CustomProperty
+                    {
+                        key = prop.Key.ToString(),
+                        value = prop.Value?.ToString() ?? "null"
+                    });
+                }
+            }
+        }
+
+        // Capture game state
+        snapshot.gameState = new GameStateSnapshot
+        {
+            isGameActive = isGameActive,
+            currentGameTime = currentGameTime,
+            isMasterClient = PhotonNetwork.IsMasterClient,
+            localPlayerNickname = PhotonNetwork.LocalPlayer?.NickName ?? "Unknown",
+            connectionState = PhotonNetwork.NetworkClientState.ToString()
+        };
+
+        // Capture all players data
+        snapshot.players = new List<PlayerDataSnapshot>();
+        foreach (Player photonPlayer in PhotonNetwork.PlayerList)
+        {
+            PlayerDataSnapshot playerData = new PlayerDataSnapshot
+            {
+                nickname = photonPlayer.NickName,
+                actorId = photonPlayer.ActorNumber,
+                isLocal = photonPlayer.IsLocal,
+                isMasterClient = photonPlayer.IsMasterClient,
+                isInactive = photonPlayer.IsInactive
+            };
+
+            // Get player stats
+            if (playerStats.ContainsKey(photonPlayer.NickName))
+            {
+                playerData.score = playerStats[photonPlayer.NickName].Score;
+                playerData.kills = playerStats[photonPlayer.NickName].Kills;
+            }
+
+            // Get kill streak
+            if (killStreaks.ContainsKey(photonPlayer.NickName))
+            {
+                playerData.killStreak = killStreaks[photonPlayer.NickName];
+            }
+
+            // Get bot kills
+            if (botKills.ContainsKey(photonPlayer.NickName))
+            {
+                playerData.botKills = botKills[photonPlayer.NickName];
+            }
+
+            // Find player GameObject and capture detailed data
+            GameObject[] playerObjects = GameObject.FindGameObjectsWithTag("Player");
+            foreach (GameObject playerObj in playerObjects)
+            {
+                PhotonView playerPV = playerObj.GetComponent<PhotonView>();
+                if (playerPV != null && playerPV.Owner != null && playerPV.Owner.ActorNumber == photonPlayer.ActorNumber)
+                {
+                    // Capture position and transform data
+                    playerData.position = new Vector3Snapshot
+                    {
+                        x = playerObj.transform.position.x,
+                        y = playerObj.transform.position.y,
+                        z = playerObj.transform.position.z
+                    };
+                    playerData.rotation = new Vector3Snapshot
+                    {
+                        x = playerObj.transform.rotation.eulerAngles.x,
+                        y = playerObj.transform.rotation.eulerAngles.y,
+                        z = playerObj.transform.rotation.eulerAngles.z
+                    };
+                    playerData.scale = new Vector3Snapshot
+                    {
+                        x = playerObj.transform.localScale.x,
+                        y = playerObj.transform.localScale.y,
+                        z = playerObj.transform.localScale.z
+                    };
+
+                    // Capture health data
+                    PlayerHealth playerHealth = playerObj.GetComponent<PlayerHealth>();
+                    if (playerHealth != null)
+                    {
+                        playerData.healthData = new PlayerHealthSnapshot
+                        {
+                            isDead = playerHealth.IsDead(),
+                            // Add more health-related data as needed
+                        };
+                    }
+
+                    // Capture movement data
+                    PlayerNetworkMover playerMover = playerObj.GetComponent<PlayerNetworkMover>();
+                    if (playerMover != null)
+                    {
+                        playerData.movementData = new PlayerMovementSnapshot
+                        {
+                            isMoving = true, // You might need to add this property to PlayerNetworkMover
+                        };
+                    }
+
+                    break;
+                }
+            }
+
+            snapshot.players.Add(playerData);
+        }
+
+        // Capture all NPCs data
+        snapshot.npcs = new List<NPCDataSnapshot>();
+        GameObject[] npcObjects = GameObject.FindGameObjectsWithTag("NPC");
+        
+        for (int i = 0; i < npcObjects.Length; i++)
+        {
+            GameObject npc = npcObjects[i];
+            if (npc == null) continue;
+
+            NPCDataSnapshot npcData = new NPCDataSnapshot
+            {
+                index = i,
+                name = npc.name,
+                isActive = npc.activeInHierarchy
+            };
+
+            // Capture position and transform data
+            npcData.position = new Vector3Snapshot
+            {
+                x = npc.transform.position.x,
+                y = npc.transform.position.y,
+                z = npc.transform.position.z
+            };
+            npcData.rotation = new Vector3Snapshot
+            {
+                x = npc.transform.rotation.eulerAngles.x,
+                y = npc.transform.rotation.eulerAngles.y,
+                z = npc.transform.rotation.eulerAngles.z
+            };
+            npcData.scale = new Vector3Snapshot
+            {
+                x = npc.transform.localScale.x,
+                y = npc.transform.localScale.y,
+                z = npc.transform.localScale.z
+            };
+
+            // Capture PhotonView data
+            PhotonView npcPV = npc.GetComponent<PhotonView>();
+            if (npcPV != null)
+            {
+                npcData.photonViewId = npcPV.ViewID;
+                npcData.ownerId = npcPV.Owner?.ActorNumber ?? -1;
+                npcData.isMine = npcPV.IsMine;
+            }
+
+            // Capture health data
+            NPCHealth npcHealth = npc.GetComponent<NPCHealth>();
+            if (npcHealth != null)
+            {
+                npcData.healthData = new NPCHealthSnapshot
+                {
+                    currentHealth = npcHealth.GetCurrentHealth(),
+                    isDead = npcHealth.IsDead(),
+                    botName = npcHealth.BotName ?? "Unknown"
+                };
+            }
+
+            // Capture controller data
+            NPCController npcController = npc.GetComponent<NPCController>();
+            if (npcController != null)
+            {
+                npcData.controllerData = new NPCControllerSnapshot
+                {
+                    isEnabled = npcController.enabled
+                };
+            }
+
+            // Capture NavMeshAgent data
+            UnityEngine.AI.NavMeshAgent agent = npc.GetComponent<UnityEngine.AI.NavMeshAgent>();
+            if (agent != null)
+            {
+                npcData.navMeshData = new NavMeshAgentSnapshot
+                {
+                    isEnabled = agent.enabled,
+                    isOnNavMesh = agent.isOnNavMesh,
+                    hasPath = agent.hasPath,
+                    pathPending = agent.pathPending,
+                    isPathStale = agent.isPathStale,
+                    speed = agent.speed,
+                    velocity = new Vector3Snapshot
+                    {
+                        x = agent.velocity.x,
+                        y = agent.velocity.y,
+                        z = agent.velocity.z
+                    },
+                    destination = new Vector3Snapshot
+                    {
+                        x = agent.destination.x,
+                        y = agent.destination.y,
+                        z = agent.destination.z
+                    },
+                    remainingDistance = agent.remainingDistance,
+                    stoppingDistance = agent.stoppingDistance,
+                    isStopped = agent.isStopped
+                };
+            }
+
+            // Capture animator data
+            Animator npcAnimator = npc.GetComponent<Animator>();
+            if (npcAnimator == null)
+            {
+                npcAnimator = npc.GetComponentInChildren<Animator>();
+            }
+            
+            if (npcAnimator != null)
+            {
+                npcData.animatorData = new NPCAnimatorSnapshot
+                {
+                    isEnabled = npcAnimator.enabled,
+                    hasAnimatorController = npcAnimator.runtimeAnimatorController != null,
+                    parameterCount = npcAnimator.parameterCount,
+                    parameters = new List<AnimatorParameterSnapshot>()
+                };
+
+                // Capture all animator parameters
+                foreach (AnimatorControllerParameter param in npcAnimator.parameters)
+                {
+                    AnimatorParameterSnapshot paramSnapshot = new AnimatorParameterSnapshot
+                    {
+                        name = param.name,
+                        type = param.type.ToString()
+                    };
+
+                    // Get parameter values based on type
+                    try
+                    {
+                        switch (param.type)
+                        {
+                            case AnimatorControllerParameterType.Float:
+                                paramSnapshot.floatValue = npcAnimator.GetFloat(param.name);
+                                break;
+                            case AnimatorControllerParameterType.Int:
+                                paramSnapshot.intValue = npcAnimator.GetInteger(param.name);
+                                break;
+                            case AnimatorControllerParameterType.Bool:
+                                paramSnapshot.boolValue = npcAnimator.GetBool(param.name);
+                                break;
+                            case AnimatorControllerParameterType.Trigger:
+                                paramSnapshot.boolValue = false; // Triggers don't have persistent values
+                                break;
+                        }
+                    }
+                    catch (System.Exception e)
+                    {
+                        paramSnapshot.error = e.Message;
+                    }
+
+                    npcData.animatorData.parameters.Add(paramSnapshot);
+                }
+            }
+
+            snapshot.npcs.Add(npcData);
+        }
+
+        // Capture network statistics
+        snapshot.networkStats = new NetworkStatsSnapshot
+        {
+            ping = PhotonNetwork.GetPing(),
+            isConnected = PhotonNetwork.IsConnected,
+            isConnectedAndReady = PhotonNetwork.IsConnectedAndReady,
+            inRoom = PhotonNetwork.InRoom,
+            inLobby = PhotonNetwork.InLobby,
+            sendRate = PhotonNetwork.SendRate,
+            networkClientState = PhotonNetwork.NetworkClientState.ToString(),
+            serverTimestamp = PhotonNetwork.ServerTimestamp,
+            time = PhotonNetwork.Time,
+            isMasterClient = PhotonNetwork.IsMasterClient,
+            playersInRoom = PhotonNetwork.CountOfPlayersInRooms,
+            roomsCount = PhotonNetwork.CountOfRooms
+        };
+
+        // Capture performance data
+        snapshot.performanceData = new PerformanceSnapshot
+        {
+            frameRate = (int)(1f / Time.deltaTime),
+            deltaTime = Time.deltaTime,
+            timeScale = Time.timeScale,
+            fixedDeltaTime = Time.fixedDeltaTime
+        };
+
+        return snapshot;
+    }
+
+    // Helper method to send trace data to API
+    private System.Collections.IEnumerator SendTracingDataToAPI(string roomIdStr, string jsonData)
+    {
+        Debug.Log($"🚀 [TRACE] Sending data to API...");
+        
+        // Parse room ID to int
+        int roomId;
+        if (!int.TryParse(roomIdStr.Replace("Room_", ""), out roomId)) {
+            roomId = UnityEngine.Random.Range(1000, 9999); // Fallback to random room ID if parsing fails
+        }
+
+        // Get all participants (wallet addresses) from the game
+        List<string> participants = new List<string>();
+        if (PhotonNetwork.CurrentRoom != null) {
+            foreach (Player player in PhotonNetwork.PlayerList) {
+                if (player.CustomProperties.ContainsKey("WalletAddress")) {
+                    participants.Add(player.CustomProperties["WalletAddress"].ToString());
+                }
+            }
+        }
+
+        // Create game data
+        var gameData = new GameData {
+            title = $"Game Session {roomId}",
+            participants = participants,
+            schedule = System.DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")
+        };
+
+        // Create the request payload
+        var payload = new TraceDataPayload {
+            roomId = roomId,
+            data = gameData
+        };
+        
+        string requestJson = "";
+        try {
+            // Convert payload to JSON
+            requestJson = JsonConvert.SerializeObject(payload, new JsonSerializerSettings { 
+                Formatting = Formatting.None
+            });
+        } catch (System.Exception e) {
+            Debug.LogError($"❌ [TRACE] Error serializing payload: {e.Message}");
+            yield break;
+        }
+
+        string apiUrl = "https://ava-shooter.vercel.app/api/avalanche/room";
+        
+        Debug.Log($"🌐 [TRACE] API URL: {apiUrl}");
+        Debug.Log($"📤 [TRACE] Request payload: {requestJson}");
+        
+        UnityWebRequest request = null;
+        try {
+            request = new UnityWebRequest(apiUrl, "POST");
+            byte[] bodyRaw = System.Text.Encoding.UTF8.GetBytes(requestJson);
+            request.uploadHandler = new UploadHandlerRaw(bodyRaw);
+            request.downloadHandler = new DownloadHandlerBuffer();
+            request.SetRequestHeader("Content-Type", "application/json");
+        } catch (System.Exception e) {
+            Debug.LogError($"❌ [TRACE] Error creating request: {e.Message}");
+            if (request != null) request.Dispose();
+            yield break;
+        }
+
+        yield return request.SendWebRequest();
+
+        try {
+            if (request.result == UnityWebRequest.Result.Success) {
+                // Parse the response
+                TraceDataResponse response = JsonConvert.DeserializeObject<TraceDataResponse>(request.downloadHandler.text);
+                
+                Debug.Log($"✅ [TRACE] API call successful!");
+                Debug.Log($"📥 [TRACE] Transaction Hash: {response.txHash}");
+                Debug.Log($"📥 [TRACE] IPFS Link: {response.ipfsLink}");
+                Debug.Log($"📥 [TRACE] Message: {response.message}");
+                
+                // Store the IPFS link and transaction hash in room properties
+                if (PhotonNetwork.IsMasterClient && PhotonNetwork.CurrentRoom != null) {
+                    ExitGames.Client.Photon.Hashtable roomProps = new ExitGames.Client.Photon.Hashtable() {
+                        { "IPFSLink", response.ipfsLink },
+                        { "TransactionHash", response.txHash }
+                    };
+                    PhotonNetwork.CurrentRoom.SetCustomProperties(roomProps);
+                }
+            } else {
+                Debug.LogError($"❌ [TRACE] API call failed: {request.error}");
+                Debug.LogError($"📊 [TRACE] Response Code: {request.responseCode}");
+                Debug.LogError($"📥 [TRACE] Response: {request.downloadHandler.text}");
+            }
+        } catch (System.Exception e) {
+            Debug.LogError($"❌ [TRACE] Error processing response: {e.Message}");
+        } finally {
+            request.Dispose();
+        }
+    }
+
+    // Helper method to save trace data to a file (keeping as backup)
+    private void SaveTraceDataToFile(string jsonData)
+    {
+        try
+        {
+            string fileName = $"GameTrace_{System.DateTime.Now:yyyyMMdd_HHmmss}.json";
+            string filePath = System.IO.Path.Combine(Application.persistentDataPath, fileName);
+            
+            System.IO.File.WriteAllText(filePath, jsonData);
+            Debug.Log($"💾 [TRACE] Data saved to file: {filePath}");
+            Debug.Log($"📁 [TRACE] File location: {Application.persistentDataPath}");
+        }
+        catch (System.Exception e)
+        {
+            Debug.LogError($"❌ [TRACE] Failed to save file: {e.Message}");
+        }
+    }
+
+    // Helper method to show trace data in UI
+    private void ShowTraceDataInUI(string jsonData)
+    {
+        try
+        {
+            // Try to find a UI text component to display the data
+            Text[] allTexts = FindObjectsOfType<Text>();
+            foreach (Text text in allTexts)
+            {
+                if (text.name.Contains("Trace") || text.name.Contains("Debug") || text.name.Contains("Log"))
+                {
+                    // Truncate the data to fit in UI
+                    string shortData = jsonData.Length > 1000 ? jsonData.Substring(0, 1000) + "..." : jsonData;
+                    text.text = $"GAME TRACE DATA:\n{shortData}";
+                    Debug.Log($"📱 [TRACE] Data displayed in UI: {text.name}");
+                    break;
+                }
+            }
+            
+            // Also try to show in the messages log
+            if (messagesLog != null)
+            {
+                string shortData = jsonData.Length > 500 ? jsonData.Substring(0, 500) + "..." : jsonData;
+                messagesLog.text = $"=== GAME TRACE DATA ===\n{shortData}\n=== END TRACE ===";
+            }
+        }
+        catch (System.Exception e)
+        {
+            Debug.LogError($"❌ [TRACE] Failed to show in UI: {e.Message}");
+        }
+    }
+}
+
+// Data structure classes for comprehensive game data tracing
+[System.Serializable]
+public class GameDataSnapshot
+{
+    public string timestamp;
+    public float unityTime;
+    public int photonServerTime;
+    public RoomInfoSnapshot roomInfo;
+    public GameStateSnapshot gameState;
+    public List<PlayerDataSnapshot> players;
+    public List<NPCDataSnapshot> npcs;
+    public NetworkStatsSnapshot networkStats;
+    public PerformanceSnapshot performanceData;
+}
+
+[System.Serializable]
+public class RoomInfoSnapshot
+{
+    public string roomName;
+    public int playerCount;
+    public int maxPlayers;
+    public bool isOpen;
+    public bool isVisible;
+    public string masterClientNickname;
+    public List<CustomProperty> customProperties;
+}
+
+[System.Serializable]
+public class CustomProperty
+{
+    public string key;
+    public string value;
+}
+
+[System.Serializable]
+public class GameStateSnapshot
+{
+    public bool isGameActive;
+    public float currentGameTime;
+    public bool isMasterClient;
+    public string localPlayerNickname;
+    public string connectionState;
+}
+
+[System.Serializable]
+public class PlayerDataSnapshot
+{
+    public string nickname;
+    public int actorId;
+    public bool isLocal;
+    public bool isMasterClient;
+    public bool isInactive;
+    public int score;
+    public int kills;
+    public int killStreak;
+    public int botKills;
+    public Vector3Snapshot position;
+    public Vector3Snapshot rotation;
+    public Vector3Snapshot scale;
+    public PlayerHealthSnapshot healthData;
+    public PlayerMovementSnapshot movementData;
+}
+
+[System.Serializable]
+public class PlayerHealthSnapshot
+{
+    public bool isDead;
+    // Add more health-related fields as needed
+}
+
+[System.Serializable]
+public class PlayerMovementSnapshot
+{
+    public bool isMoving;
+    // Add more movement-related fields as needed
+}
+
+[System.Serializable]
+public class NPCDataSnapshot
+{
+    public int index;
+    public string name;
+    public bool isActive;
+    public int photonViewId;
+    public int ownerId;
+    public bool isMine;
+    public Vector3Snapshot position;
+    public Vector3Snapshot rotation;
+    public Vector3Snapshot scale;
+    public NPCHealthSnapshot healthData;
+    public NPCControllerSnapshot controllerData;
+    public NavMeshAgentSnapshot navMeshData;
+    public NPCAnimatorSnapshot animatorData;
+}
+
+[System.Serializable]
+public class NPCHealthSnapshot
+{
+    public int currentHealth;
+    public bool isDead;
+    public string botName;
+}
+
+[System.Serializable]
+public class NPCControllerSnapshot
+{
+    public bool isEnabled;
+}
+
+[System.Serializable]
+public class NavMeshAgentSnapshot
+{
+    public bool isEnabled;
+    public bool isOnNavMesh;
+    public bool hasPath;
+    public bool pathPending;
+    public bool isPathStale;
+    public float speed;
+    public Vector3Snapshot velocity;
+    public Vector3Snapshot destination;
+    public float remainingDistance;
+    public float stoppingDistance;
+    public bool isStopped;
+}
+
+[System.Serializable]
+public class NPCAnimatorSnapshot
+{
+    public bool isEnabled;
+    public bool hasAnimatorController;
+    public int parameterCount;
+    public List<AnimatorParameterSnapshot> parameters;
+}
+
+[System.Serializable]
+public class AnimatorParameterSnapshot
+{
+    public string name;
+    public string type;
+    public float floatValue;
+    public int intValue;
+    public bool boolValue;
+    public string error;
+}
+
+[System.Serializable]
+public class Vector3Snapshot
+{
+    public float x;
+    public float y;
+    public float z;
+}
+
+[System.Serializable]
+public class NetworkStatsSnapshot
+{
+    public int ping;
+    public bool isConnected;
+    public bool isConnectedAndReady;
+    public bool inRoom;
+    public bool inLobby;
+    public int sendRate;
+    public string networkClientState;
+    public int serverTimestamp;
+    public double time;
+    public bool isMasterClient;
+    public int playersInRoom;
+    public int roomsCount;
+}
+
+[System.Serializable]
+public class PerformanceSnapshot
+{
+    public int frameRate;
+    public float deltaTime;
+    public float timeScale;
+    public float fixedDeltaTime;
 }
 
 // Add this class to parse the API response
@@ -3102,4 +3808,29 @@ public class LeaderboardEntryResponse
     public string username;
     public string createdAt;
     public int __v;
+}
+
+[System.Serializable]
+public class TraceDataPayload
+{
+    public int roomId;
+    public GameData data;
+}
+
+[System.Serializable]
+public class GameData
+{
+    public string title;
+    public List<string> participants;
+    public string schedule;
+}
+
+[System.Serializable]
+public class TraceDataResponse
+{
+    public bool success;
+    public string txHash;
+    public int roomId;
+    public string ipfsLink;
+    public string message;
 }
