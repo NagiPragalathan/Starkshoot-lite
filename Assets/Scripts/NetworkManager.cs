@@ -220,7 +220,9 @@ public class NetworkManager : MonoBehaviourPunCallbacks {
     {
         if (joinButton != null)
         {
-            joinButton.interactable = testDebugMode || (isConnected && isStaked);
+            // In debug mode, always allow joining
+            // Otherwise, require wallet connection and staking (unless in debug mode)
+            joinButton.interactable = testDebugMode || (isConnected && (testDebugMode || isStaked));
         }
 
         if (joinButtonText != null)
@@ -253,6 +255,12 @@ public class NetworkManager : MonoBehaviourPunCallbacks {
         if (isWalletConnected)
         {
             yield return StartCoroutine(FetchUserData(walletAddress));
+        }
+        else
+        {
+            Debug.Log("[Connection] Wallet not connected, proceeding without user data fetch");
+            // Set default values when wallet is not connected
+            SetDefaultValues();
         }
 
         // Step 3: Connect to Photon
@@ -578,21 +586,22 @@ public class NetworkManager : MonoBehaviourPunCallbacks {
 
     private void ConnectToPhoton()
     {
-        if (isWalletConnected && !isDataFetched)
-        {
-            if (connectionText != null)
-            {
-                connectionText.text = "Error: Could not fetch user data. Please try again.";
-            }
-            return;
-        }
-
+        // Always connect to Photon, even if data fetching failed
+        // The game should still work with default values
+        
         PhotonNetwork.AutomaticallySyncScene = true;
         PhotonNetwork.ConnectUsingSettings();
         
         if (connectionText != null)
         {
-            connectionText.text = "Connecting to game server...";
+            if (isWalletConnected && !isDataFetched)
+            {
+                connectionText.text = "Connected to game server (using default settings)...";
+            }
+            else
+            {
+                connectionText.text = "Connecting to game server...";
+            }
         }
     }
 
@@ -601,67 +610,26 @@ public class NetworkManager : MonoBehaviourPunCallbacks {
         Debug.Log("[Error Handler] Starting error recovery process");
         isDataFetched = false;
         
-        // Keep fields editable if wallet is connected, regardless of error
-        if (isWalletConnected)
-        {
-            Debug.Log("[Error Handler] Wallet is connected, keeping fields editable");
-            
-            // Enable and set default values for room name
-            if (roomName != null)
-            {
-                roomName.interactable = true;
-                string shortWallet = FormatWalletAddress(walletAddress);
-                roomName.text = $"Room_{shortWallet}";
-                Debug.Log($"[Error Handler] Set default room name: {roomName.text}");
-            }
-            else
-            {
-                Debug.LogError("[Error Handler] Room name input field is null!");
-            }
-
-            // Enable and set default values for time selection
-            if (timeSelectionDropdown != null)
-            {
-                timeSelectionDropdown.interactable = true;
-                // Default to 5 minutes (index 1)
-                timeSelectionDropdown.value = 1;
-                Debug.Log("[Error Handler] Reset time selection to default (5 minutes)");
-            }
-            else
-            {
-                Debug.LogError("[Error Handler] Time selection dropdown is null!");
-            }
-
-            // Update username if available in PlayerPrefs
-            if (username != null)
-            {
-                username.interactable = testDebugMode;
-                if (PlayerPrefs.HasKey(nickNamePrefKey))
-                {
-                    username.text = PlayerPrefs.GetString(nickNamePrefKey);
-                    Debug.Log($"[Error Handler] Restored username from PlayerPrefs: {username.text}");
-                }
-            }
-        }
-        else
-        {
-            Debug.Log("[Error Handler] Wallet not connected, disabling fields");
-            // Disable all fields when wallet is not connected
-            if (roomName != null) roomName.interactable = false;
-            if (timeSelectionDropdown != null) timeSelectionDropdown.interactable = false;
-            if (username != null) username.interactable = testDebugMode;
-        }
+        // Set default values regardless of wallet connection status
+        SetDefaultValues();
         
         // Update connection status text
         if (connectionText != null)
         {
-            connectionText.text = "Error fetching user data. Please try again.";
+            if (isWalletConnected)
+            {
+                connectionText.text = "Error fetching user data. Using default settings.";
+            }
+            else
+            {
+                connectionText.text = "Please connect your wallet to continue.";
+            }
             Debug.Log("[Error Handler] Updated connection status text");
         }
 
         // Update join button state
-        UpdateJoinButtonState(isWalletConnected, false);
-        Debug.Log($"[Error Handler] Updated join button state - Connected: {isWalletConnected}, Staked: false");
+        UpdateJoinButtonState(isWalletConnected, testDebugMode);
+        Debug.Log($"[Error Handler] Updated join button state - Connected: {isWalletConnected}, Debug Mode: {testDebugMode}");
 
         // Always show UI on error
         if (serverWindow != null) serverWindow.SetActive(true);
@@ -872,7 +840,7 @@ public class NetworkManager : MonoBehaviourPunCallbacks {
     /// The button click callback function for join room.
     /// </summary>
     public void JoinRoom() {
-        if (!isWalletConnected)
+        if (!isWalletConnected && !testDebugMode)
         {
             connectionText.text = "Please connect your wallet first!";
             return;
@@ -885,10 +853,12 @@ public class NetworkManager : MonoBehaviourPunCallbacks {
             return;
         }
 
-        if (!isDataFetched)
+        // Allow joining even if data fetch failed, but show a warning
+        if (!isDataFetched && isWalletConnected)
         {
-            connectionText.text = "Please wait while we fetch your user data...";
-            return;
+            Debug.LogWarning("[Join Room] Data fetch failed, but allowing join with default values");
+            // Set default values before joining
+            SetDefaultValues();
         }
 
         // Destroy the start game canvas immediately when join button is clicked
@@ -2945,6 +2915,57 @@ public class NetworkManager : MonoBehaviourPunCallbacks {
                 Debug.LogError($"[Staking Update] Full Response: {www.downloadHandler?.text}");
             }
         }
+    }
+
+    private void SetDefaultValues()
+    {
+        Debug.Log("[Default Values] Setting default values for game");
+        
+        // Set default username if not already set
+        if (username != null && string.IsNullOrEmpty(username.text))
+        {
+            if (PlayerPrefs.HasKey(nickNamePrefKey))
+            {
+                username.text = PlayerPrefs.GetString(nickNamePrefKey);
+            }
+            else
+            {
+                username.text = "Player" + UnityEngine.Random.Range(1000, 9999);
+            }
+        }
+
+        // Set default room name if not already set
+        if (roomName != null && string.IsNullOrEmpty(roomName.text))
+        {
+            if (!string.IsNullOrEmpty(walletAddress))
+            {
+                string shortWallet = FormatWalletAddress(walletAddress);
+                roomName.text = $"Room_{shortWallet}";
+            }
+            else
+            {
+                roomName.text = "Room_" + UnityEngine.Random.Range(1000, 9999);
+            }
+        }
+
+        // Set default time selection (5 minutes)
+        if (timeSelectionDropdown != null)
+        {
+            int defaultIndex = Array.IndexOf(timeOptions, 300f);
+            if (defaultIndex == -1)
+            {
+                defaultIndex = timeOptions.Length > 1 ? 1 : 0;
+            }
+            timeSelectionDropdown.value = defaultIndex;
+        }
+
+        // Update fields interactability
+        UpdateFieldsInteractability(true);
+        
+        // Update join button state
+        UpdateJoinButtonState(isWalletConnected, testDebugMode);
+        
+        Debug.Log("[Default Values] Default values set successfully");
     }
 
     private void UpdateFieldsInteractability(bool canEdit)
